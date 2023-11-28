@@ -239,6 +239,7 @@ def render_trajectory(
     rendered_resolution_scaling_factor: float = 1.0,
     disable_distortion: bool = False,
     return_rgba_images: bool = False,
+    render_mask: bool = True,
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """Helper function to create a video of a trajectory.
 
@@ -250,11 +251,13 @@ def render_trajectory(
         rendered_resolution_scaling_factor: Scaling factor to apply to the camera image resolution.
         disable_distortion: Whether to disable distortion.
         return_rgba_images: Whether to return RGBA images (default RGB).
+        render_mask: Whether to return geometry masks as well
 
     Returns:
-        List of rgb images, list of depth images.
+        List of rgb images, list of depth images, and possibly masks/
     """
     images = []
+    masks = []
     depths = []
     cameras.rescale_output_resolution(rendered_resolution_scaling_factor)
 
@@ -271,7 +274,7 @@ def render_trajectory(
                 camera_indices=camera_idx, disable_distortion=disable_distortion
             ).to(pipeline.device)
             with torch.no_grad():
-                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle, render_mask=render_mask)
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
                 CONSOLE.print(f"Could not find {rgb_output_name} in the model outputs", justify="center")
@@ -286,8 +289,13 @@ def render_trajectory(
                 image = pipeline.model.get_rgba_image(outputs, rgb_output_name)
             else:
                 image = outputs[rgb_output_name]
+            if render_mask:
+                mask = outputs["mask"]
+                masks.append(mask.cpu().numpy())
             images.append(image.cpu().numpy())
             depths.append(outputs[depth_output_name].cpu().numpy())
+    if render_mask:
+        return images, depths, masks
     return images, depths
 
 

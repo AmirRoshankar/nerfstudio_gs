@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from nerfstudio.viewer.server.viewer_state import ViewerState
 
 RenderStates = Literal["low_move", "low_static", "high"]
-RenderActions = Literal["rerender", "move", "static", "step"]
+RenderActions = Literal["layer_rerender", "rerender", "move", "static", "step"]
 
 
 @dataclass
@@ -102,7 +102,7 @@ class RenderStateMachine(threading.Thread):
             self.next_action = action
 
         # handle interrupt logic
-        if self.state == "high" and self.next_action.action in ("move", "rerender"):
+        if self.state == "high" and self.next_action.action in ("move", "rerender", "layer_rerender"):
             self.interrupt_render_flag = True
         self.render_trigger.set()
 

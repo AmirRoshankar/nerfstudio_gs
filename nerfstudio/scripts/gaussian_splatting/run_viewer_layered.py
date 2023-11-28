@@ -34,10 +34,10 @@ from nerfstudio.pipelines.base_pipeline import Pipeline
 from nerfstudio.utils import writer
 from nerfstudio.utils import constants
 from nerfstudio.viewer.server.viewer_state import ViewerState
-from nerfstudio.scripts.gaussian_splatting.gaussian_splatting_config import GaussianSplattingConfig
+from nerfstudio.scripts.gaussian_splatting.gaussian_splatting_config import GaussianSplattingConfig, GaussianSplattingConfigLayered
 
 @dataclass
-class RunViewer(GaussianSplattingConfig):
+class RunViewer(GaussianSplattingConfigLayered):
     def main(self) -> None:
         """Main function."""
         pipeline = self.setup_pipeline()

@@ -114,6 +114,13 @@ def _cast_vector(vector: TVector | onp.ndarray, length: int) -> TVector:
     assert cast(onp.ndarray, vector).shape == (length,)
     return cast(TVector, tuple(map(float, vector)))
 
+def _cast_vector_int(vector: TVector | onp.ndarray, length: int) -> TVector:
+    if isinstance(vector, tuple):
+        assert len(vector) == length
+        return cast(TVector, vector)
+    assert cast(onp.ndarray, vector).shape == (length,)
+    return cast(TVector, tuple(map(int, vector)))
+
 
 T = TypeVar("T")
 IntOrFloat = TypeVar("IntOrFloat", int, float)
@@ -230,6 +237,32 @@ class MessageApi(abc.ABC):
         return self._add_gui_impl(
             "/".join(self._gui_folder_labels + [name]),
             _cast_vector(initial_value, length=2),
+            leva_conf={
+                "value": initial_value,
+                "label": name,
+                "step": step,
+            },
+            hint=hint,
+        )
+        
+    def add_gui_vector2_int(
+        self,
+        name: str,
+        initial_value: Tuple[int, int] | onp.ndarray,
+        step: Optional[int] = None,
+        hint: Optional[str] = None,
+    ) -> GuiHandle[Tuple[int, int]]:
+        """Add a length-2 vector input to the GUI.
+
+        Args:
+            name: The name of the vector.
+            initial_value: The initial value of the vector.
+            step: The step size for the vector.
+            hint: A hint for the vector.
+        """
+        return self._add_gui_impl(
+            "/".join(self._gui_folder_labels + [name]),
+            _cast_vector_int(initial_value, length=2),
             leva_conf={
                 "value": initial_value,
                 "label": name,
@@ -505,6 +538,19 @@ class MessageApi(abc.ABC):
                 max=tuple(scene_box.aabb[1].tolist()),
             )
         )
+        
+    def update_layers(self, layer_range) -> None:
+        """Update the layer range.
+
+        Args:
+            layer_range: layer range
+        """
+        self._queue(
+            messages.LayerRangeMessage(
+                min=layer_range[0],
+                max=layer_range[1],
+            )
+        )
 
     def add_dataset_image(self, idx: str, json: Dict) -> None:
         """Add a dataset image to the scene.
@@ -529,6 +575,7 @@ class MessageApi(abc.ABC):
         look_at: Optional[Tuple[float, float, float]] = None,
         fov: Optional[int] = None,
         instant: bool = False,
+        layer_range: Optional[Tuple[int, int]] = [0, -1]
     ) -> None:
         """Update the camera object in the viewer. If any of the arguments are None, the corresponding value will not
         be set in the viewer. For example, setting position only will maintain the same look-at point while moving
@@ -540,7 +587,7 @@ class MessageApi(abc.ABC):
             fov: The new field of view
             instant: Whether to move the camera instantly or animate
         """
-        self._queue(messages.SetCameraMessage(look_at=look_at, position=position, fov=fov, instant=instant))
+        self._queue(messages.SetCameraMessage(look_at=look_at, position=position, fov=fov, instant=instant, layer_range=layer_range))
 
     def send_camera_paths(self, camera_paths: Dict[str, Any]) -> None:
         """Send camera paths to the scene.

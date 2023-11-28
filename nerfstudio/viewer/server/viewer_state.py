@@ -35,6 +35,7 @@ from nerfstudio.utils.decorators import check_main_thread, decorate_all
 from nerfstudio.utils.io import load_from_json, write_to_json
 from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.writer import GLOBAL_BUFFER, EventName
+from nerfstudio.utils import constants
 from nerfstudio.viewer.server import viewer_utils
 from nerfstudio.viewer.server.control_panel import ControlPanel
 from nerfstudio.viewer.server.gui_utils import parse_object
@@ -140,6 +141,8 @@ class ViewerState:
             self._crop_params_update,
             self._output_type_change,
             self._output_split_type_change,
+            self._layer_update,
+            self._viewer_update
         )
 
         def nested_folder_install(folder_labels: List[str], element: ViewerElement):
@@ -184,6 +187,33 @@ class ViewerState:
 
     def _interrupt_render(self, _) -> None:
         """Interrupt current render."""
+        if self.camera_message is not None:
+            self.render_statemachine.action(RenderAction("rerender", self.camera_message))
+            
+    def _layer_update(self, _) -> None:
+        """Interrupt current render with layer message."""
+        # layer_range = self.control_panel.layer_range
+        # self.viser_server.update_layers(layer_range)
+        # self.camera_message.layer_range = layer_range
+        layer_range = list(self.control_panel.layer_range)
+        layer_range[0] = int(layer_range[0])
+        layer_range[1] = int(layer_range[1])
+        if layer_range[1] < layer_range[0]:
+            layer_range[1] = layer_range[0]
+        if layer_range[0] < 0:
+            layer_range[0] = 0
+        if layer_range[1] < 0:
+            layer_range[1] = 0
+        constants.LAYER_RANGE = layer_range
+        if self.camera_message is not None:
+            self.render_statemachine.action(RenderAction("rerender", self.camera_message))
+            
+    def _viewer_update(self, _) -> None:
+        """Interrupt current render with layer message."""
+        view_mode = self.control_panel.viewer_mode
+        # self.viser_server.update_layers(layer_range)
+        # self.camera_message.layer_range = layer_range
+        constants.GEOM_FLAG = view_mode == 'Depth'
         if self.camera_message is not None:
             self.render_statemachine.action(RenderAction("rerender", self.camera_message))
 

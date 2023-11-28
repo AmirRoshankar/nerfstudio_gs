@@ -541,3 +541,31 @@ class ViewerVec3(ViewerParameter[Tuple[float, float, float]]):
     def _create_gui_handle(self, viser_server: ViserServer) -> None:
         self.gui_handle = viser_server.add_gui_vector3(self.name, self.default_value, self.step, hint=self.hint)
         self.gui_handle.set_disabled(self.disabled)
+        
+class ViewerVec2(ViewerParameter[Tuple[int, int]]):
+    """
+    2 number boxes in a row to input a vector
+
+    Args:
+        name: The name of the vector
+        default_value: The default value of the vector
+        disabled: If the vector is disabled
+        cb_hook: Callback to call on update
+        hint: The hint text
+    """
+
+    def __init__(
+        self,
+        name,
+        default_value: Tuple[int, int],
+        disabled=False,
+        cb_hook: Callable[[ViewerVec2], Any] = lambda element: None,
+        hint: Optional[str] = None,
+    ):
+        assert len(default_value) == 2
+        super().__init__(name, default_value, disabled=disabled, cb_hook=cb_hook)
+        self.hint = hint
+
+    def _create_gui_handle(self, viser_server: ViserServer) -> None:
+        self.gui_handle = viser_server.add_gui_vector2_int(self.name, self.default_value, hint=self.hint)
+        self.gui_handle.set_disabled(self.disabled)
