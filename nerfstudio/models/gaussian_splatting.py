@@ -155,6 +155,8 @@ class GaussianSplatting(Model):
 
         Background tensor (bg_color) must be on GPU!
         """
+        # bg_color = torch.rand_like(bg_color)
+        
         flipped_xyz = pc.get_xyz
         flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
         flipped_xyz[..., 1] = -flipped_xyz[..., 1]
@@ -382,6 +384,8 @@ class GaussianSplattingLayered(Model):
 
         Background tensor (bg_color) must be on GPU!
         """      
+        # bg_color = torch.rand_like(bg_color)
+        
         print("geom flag", constants.GEOM_FLAG)
         print("layer range", constants.LAYER_RANGE)
         # correct layer range
