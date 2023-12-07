@@ -35,13 +35,11 @@ from nerfstudio.utils.decorators import check_main_thread, decorate_all
 from nerfstudio.utils.io import load_from_json, write_to_json
 from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.writer import GLOBAL_BUFFER, EventName
+from nerfstudio.utils import constants
 from nerfstudio.viewer.server import viewer_utils
 from nerfstudio.viewer.server.control_panel import ControlPanel
 from nerfstudio.viewer.server.gui_utils import parse_object
-from nerfstudio.viewer.server.render_state_machine import (
-    RenderAction,
-    RenderStateMachine,
-)
+from nerfstudio.viewer.server.render_state_machine import RenderAction, RenderStateMachine
 from nerfstudio.viewer.server.utils import get_intrinsics_matrix_and_camera_to_world_h
 from nerfstudio.viewer.server.viewer_elements import ViewerControl, ViewerElement
 from nerfstudio.viewer.viser import ViserServer
@@ -143,6 +141,8 @@ class ViewerState:
             self._crop_params_update,
             self._output_type_change,
             self._output_split_type_change,
+            self._layer_update,
+            self._viewer_update
         )
 
         def nested_folder_install(folder_labels: List[str], element: ViewerElement):
@@ -187,6 +187,33 @@ class ViewerState:
 
     def _interrupt_render(self, _) -> None:
         """Interrupt current render."""
+        if self.camera_message is not None:
+            self.render_statemachine.action(RenderAction("rerender", self.camera_message))
+            
+    def _layer_update(self, _) -> None:
+        """Interrupt current render with layer message."""
+        # layer_range = self.control_panel.layer_range
+        # self.viser_server.update_layers(layer_range)
+        # self.camera_message.layer_range = layer_range
+        layer_range = list(self.control_panel.layer_range)
+        layer_range[0] = int(layer_range[0])
+        layer_range[1] = int(layer_range[1])
+        if layer_range[1] < layer_range[0]:
+            layer_range[1] = layer_range[0]
+        if layer_range[0] < 0:
+            layer_range[0] = 0
+        if layer_range[1] < 0:
+            layer_range[1] = 0
+        constants.LAYER_RANGE = layer_range
+        if self.camera_message is not None:
+            self.render_statemachine.action(RenderAction("rerender", self.camera_message))
+            
+    def _viewer_update(self, _) -> None:
+        """Interrupt current render with layer message."""
+        view_mode = self.control_panel.viewer_mode
+        # self.viser_server.update_layers(layer_range)
+        # self.camera_message.layer_range = layer_range
+        constants.GEOM_FLAG = view_mode == 'Depth'
         if self.camera_message is not None:
             self.render_statemachine.action(RenderAction("rerender", self.camera_message))
 
@@ -331,7 +358,7 @@ class ViewerState:
         camera = camera.to(self.get_model().device)
         return camera
 
-    def _pick_drawn_image_idxs(self, total_num: int) -> list[int]:
+    def _pick_drawn_image_idxs(self, total_num: int) -> np.ndarray:
         """Determine indices of images to display in viewer.
 
         Args:
@@ -345,9 +372,14 @@ class ViewerState:
         else:
             num_display_images = min(self.config.max_num_display_images, total_num)
         # draw indices, roughly evenly spaced
-        return np.linspace(0, total_num - 1, num_display_images, dtype=np.int32).tolist()
+        return np.linspace(0, total_num - 1, num_display_images, dtype=np.int32)
 
-    def init_scene(self, dataset: InputDataset, train_state: Literal["training", "paused", "completed"]) -> None:
+    def init_scene(
+        self,
+        train_dataset: InputDataset,
+        train_state: Literal["training", "paused", "completed"],
+        eval_dataset: Optional[InputDataset] = None,
+    ) -> None:
         """Draw some images and the scene aabb in the viewer.
 
         Args:
@@ -360,16 +392,39 @@ class ViewerState:
             export_path_name=self.log_filename.parent.stem,
         )
 
+        # total num of images
+        num_images = len(train_dataset)
+        if eval_dataset is not None:
+            num_images += len(eval_dataset)
+
         # draw the training cameras and images
-        image_indices = self._pick_drawn_image_idxs(len(dataset))
-        for idx in image_indices:
-            image = dataset[idx]["image"]
+        image_indices = self._pick_drawn_image_idxs(num_images)
+        for idx in image_indices[image_indices < len(train_dataset)].tolist():
+            image = train_dataset[idx]["image"]
             bgr = image[..., [2, 1, 0]]
-            camera_json = dataset.cameras.to_json(camera_idx=idx, image=bgr, max_size=100)
+            camera_json = train_dataset.cameras.to_json(camera_idx=idx, image=bgr, max_size=100)
             self.viser_server.add_dataset_image(idx=f"{idx:06d}", json=camera_json)
 
+        # draw the eval cameras and images
+        if eval_dataset is not None:
+            image_indices = image_indices[image_indices >= len(train_dataset)] - len(train_dataset)
+            for idx in image_indices.tolist():
+                image = eval_dataset[idx]["image"]
+                bgr = image[..., [2, 1, 0]]
+                # color the eval image borders red
+                # TODO: color the threejs frustum instead of changing the image itself like we are doing here
+                t = int(min(image.shape[:2]) * 0.1)  # border thickness as 10% of min height or width resolution
+                bc = torch.tensor((0, 0, 1.0))
+                bgr[:t, :, :] = bc
+                bgr[-t:, :, :] = bc
+                bgr[:, -t:, :] = bc
+                bgr[:, :t, :] = bc
+
+                camera_json = eval_dataset.cameras.to_json(camera_idx=idx, image=bgr, max_size=100)
+                self.viser_server.add_dataset_image(idx=f"{idx+len(train_dataset):06d}", json=camera_json)
+
         # draw the scene box (i.e., the bounding box)
-        self.viser_server.update_scene_box(dataset.scene_box)
+        self.viser_server.update_scene_box(train_dataset.scene_box)
 
         # set the initial state whether to train or not
         self.train_btn_state = train_state

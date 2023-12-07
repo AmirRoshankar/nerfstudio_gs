@@ -136,7 +136,7 @@ class SetCameraMessage(NerfstudioMessage):
     """ Position of the camera"""
     instant: bool = False
     """ Whether to move the camera instantly or animate it"""
-
+    # layer_range: Optional[Tuple[int, int]] = [0, -1]
 
 @dataclasses.dataclass
 class CameraMessage(NerfstudioMessage):
@@ -158,8 +158,8 @@ class CameraMessage(NerfstudioMessage):
     """ True if the camera is moving, False otherwise """
     timestamp: int
     """JSON computed by the camera class"""
-
-
+    # layer_range: Optional[Tuple[int, int]] = [0, -1]
+    
 @dataclasses.dataclass
 class SceneBoxMessage(NerfstudioMessage):
     """Scene Box data."""
@@ -168,6 +168,15 @@ class SceneBoxMessage(NerfstudioMessage):
     """ Minimum coordinates of the scene box """
     max: Tuple[float, float, float]
     """ Maximum coordinates of the scene box """
+    
+@dataclasses.dataclass
+class LayerRangeMessage(NerfstudioMessage):
+    """Layer Range data."""
+
+    min: int
+    """ Minimum layer idx """
+    max: int
+    """ Maximum layer idx"""
 
 
 @dataclasses.dataclass

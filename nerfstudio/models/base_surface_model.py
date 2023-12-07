@@ -25,15 +25,15 @@ from typing import Any, Dict, List, Literal, Tuple, Type, cast
 import torch
 import torch.nn.functional as F
 from torch.nn import Parameter
-from torchmetrics import PeakSignalNoiseRatio
 from torchmetrics.functional import structural_similarity_index_measure
+from torchmetrics.image import PeakSignalNoiseRatio
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.field_components.encodings import NeRFEncoding
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
-from nerfstudio.fields.nerfacto_field import TCNNNerfactoField
+from nerfstudio.fields.nerfacto_field import NerfactoField
 from nerfstudio.fields.sdf_field import SDFFieldConfig
 from nerfstudio.fields.vanilla_nerf_field import NeRFField
 from nerfstudio.model_components.losses import (
@@ -124,7 +124,7 @@ class SurfaceModel(Model):
 
         # background model
         if self.config.background_model == "grid":
-            self.field_background = TCNNNerfactoField(
+            self.field_background = NerfactoField(
                 self.scene_box.aabb,
                 spatial_distortion=self.scene_contraction,
                 num_images=self.num_train_data,
@@ -293,7 +293,12 @@ class SurfaceModel(Model):
         """
         loss_dict = {}
         image = batch["image"].to(self.device)
-        loss_dict["rgb_loss"] = self.rgb_loss(image, outputs["rgb"])
+        pred_image, image = self.renderer_rgb.blend_background_for_loss_computation(
+            pred_image=outputs["rgb"],
+            pred_accumulation=outputs["accumulation"],
+            gt_image=image,
+        )
+        loss_dict["rgb_loss"] = self.rgb_loss(image, pred_image)
         if self.training:
             # eikonal loss
             grad_theta = outputs["eik_grad"]
@@ -337,6 +342,7 @@ class SurfaceModel(Model):
         """
         metrics_dict = {}
         image = batch["image"].to(self.device)
+        image = self.renderer_rgb.blend_background(image)
         metrics_dict["psnr"] = self.psnr(outputs["rgb"], image)
         return metrics_dict
 
@@ -352,6 +358,7 @@ class SurfaceModel(Model):
             A dictionary of metrics.
         """
         image = batch["image"].to(self.device)
+        image = self.renderer_rgb.blend_background(image)
         rgb = outputs["rgb"]
         acc = colormaps.apply_colormap(outputs["accumulation"])
 

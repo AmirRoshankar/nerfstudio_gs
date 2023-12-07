@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional, Type
@@ -26,12 +25,14 @@ from PIL import Image
 
 from nerfstudio.cameras import camera_utils
 from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import (
-    DataParser,
-    DataParserConfig,
-    DataparserOutputs,
-)
+from nerfstudio.data.dataparsers.base_dataparser import DataParser, DataParserConfig, DataparserOutputs
 from nerfstudio.data.scene_box import SceneBox
+from nerfstudio.data.utils.dataparsers_utils import (
+    get_train_eval_split_filename,
+    get_train_eval_split_fraction,
+    get_train_eval_split_interval,
+    get_train_eval_split_all,
+)
 from nerfstudio.utils.io import load_from_json
 from nerfstudio.utils.rich_utils import CONSOLE
 
@@ -58,8 +59,18 @@ class NerfstudioDataParserConfig(DataParserConfig):
     """The method to use to center the poses."""
     auto_scale_poses: bool = True
     """Whether to automatically scale the poses to fit in +/- 1 bounding box."""
+    eval_mode: Literal["fraction", "filename", "interval", "all"] = "fraction"
+    """
+    The method to use for splitting the dataset into train and eval. 
+    Fraction splits based on a percentage for train and the remaining for eval.
+    Filename splits based on filenames containing train/eval.
+    Interval uses every nth frame for eval.
+    All uses all the images for any split.
+    """
     train_split_fraction: float = 0.9
-    """The fraction of images to use for training. The remaining images are for eval."""
+    """The percentage of the dataset to use for training. Only used when eval_mode is train-split-fraction."""
+    eval_interval: int = 8
+    """The interval between frames to use for eval. Only used when eval_mode is eval-interval."""
     depth_unit_scale_factor: float = 1e-3
     """Scales the depth values to meters. Default value is 0.001 for a millimeter to meter conversion."""
 
@@ -85,7 +96,6 @@ class Nerfstudio(DataParser):
         mask_filenames = []
         depth_filenames = []
         poses = []
-        num_skipped_image_filenames = 0
 
         fx_fixed = "fl_x" in meta
         fy_fixed = "fl_y" in meta
@@ -98,6 +108,8 @@ class Nerfstudio(DataParser):
             if distort_key in meta:
                 distort_fixed = True
                 break
+        camera_type_fixed = distort_fixed
+
         fx = []
         fy = []
         cx = []
@@ -105,13 +117,20 @@ class Nerfstudio(DataParser):
         height = []
         width = []
         distort = []
+        camera_type = []
 
+        # sort the frames by fname
+        fnames = []
         for frame in meta["frames"]:
             filepath = Path(frame["file_path"])
             fname = self._get_fname(filepath, data_dir)
-            if not fname.exists():
-                num_skipped_image_filenames += 1
-                continue
+            fnames.append(fname)
+        inds = np.argsort(fnames)
+        frames = [meta["frames"][ind] for ind in inds]
+
+        for frame in frames:
+            filepath = Path(frame["file_path"])
+            fname = self._get_fname(filepath, data_dir)
 
             if not fx_fixed:
                 assert "fl_x" in frame, "fx not specified in frame"
@@ -142,6 +161,11 @@ class Nerfstudio(DataParser):
                         p2=float(frame["p2"]) if "p2" in frame else 0.0,
                     )
                 )
+            if not camera_type_fixed:
+                if "camera_model" in frame:
+                    camera_type.append(CAMERA_MODEL_TO_TYPE[frame["camera_model"]])
+                else:
+                    camera_type.append(CameraType.PERSPECTIVE)
 
             image_filenames.append(fname)
             poses.append(np.array(frame["transform_matrix"]))
@@ -159,22 +183,14 @@ class Nerfstudio(DataParser):
                 depth_fname = self._get_fname(depth_filepath, data_dir, downsample_folder_prefix="depths_")
                 depth_filenames.append(depth_fname)
 
-        if num_skipped_image_filenames >= 0:
-            CONSOLE.log(f"Skipping {num_skipped_image_filenames} files in dataset split {split}.")
-        assert (
-            len(image_filenames) != 0
-        ), """
-        No image files found. 
-        You should check the file_paths in the transforms.json file to make sure they are correct.
-        """
         assert len(mask_filenames) == 0 or (
-            len(mask_filenames) == len(image_filenames)
+                len(mask_filenames) == len(image_filenames)
         ), """
         Different number of image and mask filenames.
         You should check that mask_path is specified for every frame (or zero frames) in transforms.json.
         """
         assert len(depth_filenames) == 0 or (
-            len(depth_filenames) == len(image_filenames)
+                len(depth_filenames) == len(image_filenames)
         ), """
         Different number of image and depth filenames.
         You should check that depth_file_path is specified for every frame (or zero frames) in transforms.json.
@@ -194,16 +210,21 @@ class Nerfstudio(DataParser):
         elif has_split_files_spec:
             raise RuntimeError(f"The dataset's list of filenames for split {split} is missing.")
         else:
-            # filter image_filenames and poses based on train/eval split percentage
-            num_images = len(image_filenames)
-            num_train_images = math.ceil(num_images * self.config.train_split_fraction)
-            num_eval_images = num_images - num_train_images
-            i_all = np.arange(num_images)
-            i_train = np.linspace(
-                0, num_images - 1, num_train_images, dtype=int
-            )  # equally spaced training images starting and ending at 0 and num_images-1
-            i_eval = np.setdiff1d(i_all, i_train)  # eval images are the remaining images
-            assert len(i_eval) == num_eval_images
+            # find train and eval indices based on the eval_mode specified
+            if self.config.eval_mode == "fraction":
+                i_train, i_eval = get_train_eval_split_fraction(image_filenames, self.config.train_split_fraction)
+            elif self.config.eval_mode == "filename":
+                i_train, i_eval = get_train_eval_split_filename(image_filenames)
+            elif self.config.eval_mode == "interval":
+                i_train, i_eval = get_train_eval_split_interval(image_filenames, self.config.eval_interval)
+            elif self.config.eval_mode == "all":
+                CONSOLE.log(
+                    "[yellow] Be careful with '--eval-mode=all'. If using camera optimization, the cameras may diverge in the current implementation, giving unpredictable results."
+                )
+                i_train, i_eval = get_train_eval_split_all(image_filenames)
+            else:
+                raise ValueError(f"Unknown eval mode {self.config.eval_mode}")
+
             if split == "train":
                 indices = i_train
             elif split in ["val", "test"]:
@@ -249,10 +270,13 @@ class Nerfstudio(DataParser):
             )
         )
 
-        if "camera_model" in meta:
-            camera_type = CAMERA_MODEL_TO_TYPE[meta["camera_model"]]
+        if camera_type_fixed:
+            if "camera_model" in meta:
+                camera_type = CAMERA_MODEL_TO_TYPE[meta["camera_model"]]
+            else:
+                camera_type = CameraType.PERSPECTIVE
         else:
-            camera_type = CameraType.PERSPECTIVE
+            camera_type = [camera_type[i] for i in indices]
 
         fx = float(meta["fl_x"]) if fx_fixed else torch.tensor(fx, dtype=torch.float32)[idx_tensor]
         fy = float(meta["fl_y"]) if fy_fixed else torch.tensor(fy, dtype=torch.float32)[idx_tensor]
@@ -328,11 +352,11 @@ class Nerfstudio(DataParser):
                 while True:
                     if (max_res / 2 ** (df)) < MAX_AUTO_RESOLUTION:
                         break
-                    if not (data_dir / f"{downsample_folder_prefix}{2**(df+1)}" / filepath.name).exists():
+                    if not (data_dir / f"{downsample_folder_prefix}{2 ** (df + 1)}" / filepath.name).exists():
                         break
                     df += 1
 
-                self.downscale_factor = 2**df
+                self.downscale_factor = 2 ** df
                 CONSOLE.log(f"Auto image downscale factor of {self.downscale_factor}")
             else:
                 self.downscale_factor = self.config.downscale_factor

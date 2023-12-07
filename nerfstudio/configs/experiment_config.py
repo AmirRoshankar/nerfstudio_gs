@@ -57,7 +57,7 @@ class ExperimentConfig(InstantiateConfig):
     """Logging configuration"""
     viewer: ViewerConfig = ViewerConfig()
     """Viewer configuration"""
-    pipeline: Any = VanillaPipelineConfig()
+    pipeline: VanillaPipelineConfig = VanillaPipelineConfig()
     """Pipeline configuration"""
     optimizers: Dict[str, Any] = to_immutable_dict(
         {
@@ -68,12 +68,18 @@ class ExperimentConfig(InstantiateConfig):
         }
     )
     """Dictionary of optimizer groups and their schedulers"""
-    vis: Literal["viewer", "wandb", "tensorboard", "viewer+wandb", "viewer+tensorboard", "viewer_beta"] = "wandb"
+    vis: Literal[
+        "viewer", "wandb", "tensorboard", "comet", "viewer+wandb", "viewer+tensorboard", "viewer+comet", "viewer_beta"
+    ] = "wandb"
     """Which visualizer to use."""
     data: Optional[Path] = None
     """Alias for --pipeline.datamanager.data"""
+    prompt: Optional[str] = None
+    """Alias for --pipeline.model.prompt"""
     relative_model_dir: Path = Path("nerfstudio_models/")
     """Relative path to save all checkpoints."""
+    load_scheduler: bool = True
+    """Whether to load the scheduler state_dict to resume training, if it exists."""
 
     def is_viewer_enabled(self) -> bool:
         """Checks if a viewer is enabled."""
@@ -90,6 +96,9 @@ class ExperimentConfig(InstantiateConfig):
     def is_tensorboard_enabled(self) -> bool:
         """Checks if tensorboard is enabled."""
         return ("tensorboard" == self.vis) | ("viewer+tensorboard" == self.vis)
+
+    def is_comet_enabled(self) -> bool:
+        return ("comet" == self.vis) | ("viewer+comet" == self.vis)
 
     def set_timestamp(self) -> None:
         """Dynamically set the experiment timestamp"""

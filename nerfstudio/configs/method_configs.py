@@ -22,33 +22,29 @@ from collections import OrderedDict
 from typing import Dict
 
 import tyro
+from nerfstudio.data.pixel_samplers import PairPixelSamplerConfig
 
 from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.configs.external_methods import get_external_methods
-from nerfstudio.data.datamanagers.base_datamanager import (
-    VanillaDataManager,
-    VanillaDataManagerConfig,
-)
-from nerfstudio.data.datamanagers.blocknerf_datamanager import BlockNeRFDatamanagerConfig
-from nerfstudio.data.datamanagers.nerflab_datamanager import NeRFLabDataManagerConfig
+
+from nerfstudio.data.datamanagers.random_cameras_datamanager import RandomCamerasDataManagerConfig
+from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager, VanillaDataManagerConfig
+from nerfstudio.data.datamanagers.gaussian_splatting_datamanager import GaussianSplattingDatamanager, \
+    GaussianSplattingDatamanagerConfig
+
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
-from nerfstudio.data.dataparsers.dycheck_dataparser import DycheckDataParserConfig
-from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
-    InstantNGPDataParserConfig,
-)
+from nerfstudio.data.dataparsers.instant_ngp_dataparser import InstantNGPDataParserConfig
 from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
-from nerfstudio.data.dataparsers.nerflab_dataparser import NerflabDataParserConfig
-from nerfstudio.data.dataparsers.blocknerf_dataparser import BlocknerfDataParserConfig
-from nerfstudio.data.dataparsers.phototourism_dataparser import (
-    PhototourismDataParserConfig,
-)
+from nerfstudio.data.dataparsers.gaussian_splatting_dataparser import GaussianSplattingDataParserConfig
+from nerfstudio.data.dataparsers.phototourism_dataparser import PhototourismDataParserConfig
 from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
 from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
 from nerfstudio.data.datasets.depth_dataset import DepthDataset
 from nerfstudio.data.datasets.sdf_dataset import SDFDataset
 from nerfstudio.data.datasets.semantic_dataset import SemanticDataset
+from nerfstudio.data.datasets.gaussian_splatting_dataset import GaussianSplattingDataset
 from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
 from nerfstudio.engine.schedulers import (
     CosineDecaySchedulerConfig,
@@ -59,29 +55,26 @@ from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.field_components.temporal_distortions import TemporalDistortionKind
 from nerfstudio.fields.sdf_field import SDFFieldConfig
 from nerfstudio.models.depth_nerfacto import DepthNerfactoModelConfig
+from nerfstudio.models.generfacto import GenerfactoModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
+from nerfstudio.models.gaussian_splatting import GaussianSplattingModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
-from nerfstudio.models.nerflab import NerflabModelConfig
-from nerfstudio.models.blocknerf import BlocknerfModelConfig
-from nerfstudio.models.nerfplayer_nerfacto import NerfplayerNerfactoModelConfig
-from nerfstudio.models.nerfplayer_ngp import NerfplayerNGPModelConfig
 from nerfstudio.models.neus import NeuSModelConfig
 from nerfstudio.models.neus_facto import NeuSFactoModelConfig
 from nerfstudio.models.semantic_nerfw import SemanticNerfWModelConfig
 from nerfstudio.models.tensorf import TensoRFModelConfig
 from nerfstudio.models.vanilla_nerf import NeRFModel, VanillaModelConfig
 from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
-from nerfstudio.pipelines.blocknerf_pipeline import BlockNeRFPipelineConfig
+from nerfstudio.pipelines.gaussian_splatting_pipeline import GaussianSplattingPipelineConfig
 from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig
 from nerfstudio.plugins.registry import discover_methods
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
+    "gs": "3D Gaussian Splatting",
     "nerfacto": "Recommended real-time model tuned for real captures. This model will be continually updated.",
-    "nerflab": "NeRF Laboratory.",
     "depth-nerfacto": "Nerfacto with depth supervision.",
-    "volinga": "Real-time rendering model from Volinga. Directly exportable to NVOL format at https://volinga.ai/",
     "instant-ngp": "Implementation of Instant-NGP. Recommended real-time model for unbounded scenes.",
     "instant-ngp-bounded": "Implementation of Instant-NGP. Recommended for bounded real and synthetic scenes",
     "mipnerf": "High quality model for bounded scenes. (slow)",
@@ -90,12 +83,25 @@ descriptions = {
     "tensorf": "tensorf",
     "dnerf": "Dynamic-NeRF model. (slow)",
     "phototourism": "Uses the Phototourism data.",
-    "nerfplayer-nerfacto": "NeRFPlayer with nerfacto backbone.",
-    "nerfplayer-ngp": "NeRFPlayer with InstantNGP backbone.",
+    "generfacto": "Generative Text to NeRF model",
     "neus": "Implementation of NeuS. (slow)",
     "neus-facto": "Implementation of NeuS-Facto. (slow)",
 }
 
+method_configs["gs"] = TrainerConfig(
+    method_name="gaussian_splatting",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=True,
+    pipeline=GaussianSplattingPipelineConfig(
+        datamanager=GaussianSplattingDatamanagerConfig(),
+        model=GaussianSplattingModelConfig(),
+    ),
+    optimizers={},
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
 method_configs["nerfacto"] = TrainerConfig(
     method_name="nerfacto",
     steps_per_eval_batch=500,
@@ -118,11 +124,11 @@ method_configs["nerfacto"] = TrainerConfig(
     optimizers={
         "proposal_networks": {
             "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100000),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
         },
         "fields": {
             "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100000),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
@@ -137,7 +143,7 @@ method_configs["nerfacto-big"] = TrainerConfig(
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
             dataparser=NerfstudioDataParserConfig(),
-            train_num_rays_per_batch=4096,
+            train_num_rays_per_batch=8192,
             eval_num_rays_per_batch=4096,
             camera_optimizer=CameraOptimizerConfig(
                 mode="SO3xR3",
@@ -150,8 +156,8 @@ method_configs["nerfacto-big"] = TrainerConfig(
             num_proposal_samples_per_ray=(512, 256),
             hidden_dim=128,
             hidden_dim_color=128,
-            hidden_dim_transient=128,
-            max_res=3000,
+            appearance_embed_dim=128,
+            max_res=4096,
             proposal_weights_anneal_max_num_iters=5000,
             log2_hashmap_size=21,
         ),
@@ -163,59 +169,54 @@ method_configs["nerfacto-big"] = TrainerConfig(
         },
         "fields": {
             "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-4, max_steps=100000),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-4, max_steps=50000),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
     vis="viewer",
 )
-
-method_configs["nerflab"] = TrainerConfig(
-    method_name="nerflab",
-    steps_per_eval_batch=15000,
+method_configs["nerfacto-huge"] = TrainerConfig(
+    method_name="nerfacto",
+    steps_per_eval_batch=500,
     steps_per_save=2000,
-    max_num_iterations=15001,
+    max_num_iterations=100000,
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
-        datamanager=NeRFLabDataManagerConfig(
-            dataparser=NerflabDataParserConfig(),
-            train_num_rays_per_batch=20480,
-            eval_num_rays_per_batch=20480,
+        datamanager=VanillaDataManagerConfig(
+            dataparser=NerfstudioDataParserConfig(),
+            train_num_rays_per_batch=16384,
+            eval_num_rays_per_batch=4096,
             camera_optimizer=CameraOptimizerConfig(
-                mode="off", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+                mode="SO3xR3",
+                optimizer=RAdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-3),
+                scheduler=ExponentialDecaySchedulerConfig(lr_final=6e-5, max_steps=50000),
             ),
         ),
-        model=NerflabModelConfig(eval_num_rays_per_chunk=1 << 15),
+        model=NerfactoModelConfig(
+            eval_num_rays_per_chunk=1 << 15,
+            num_nerf_samples_per_ray=64,
+            num_proposal_samples_per_ray=(512, 512),
+            proposal_net_args_list=[
+                {"hidden_dim": 16, "log2_hashmap_size": 17, "num_levels": 5, "max_res": 512, "use_linear": False},
+                {"hidden_dim": 16, "log2_hashmap_size": 17, "num_levels": 7, "max_res": 2048, "use_linear": False},
+            ],
+            hidden_dim=256,
+            hidden_dim_color=256,
+            appearance_embed_dim=32,
+            max_res=8192,
+            proposal_weights_anneal_max_num_iters=5000,
+            log2_hashmap_size=21,
+        ),
     ),
     optimizers={
         "proposal_networks": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100001),
+            "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
         },
         "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100001),
+            "optimizer": RAdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-4, max_steps=50000),
         },
-        "visibility_network": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100001),
-        },
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-    vis="viewer",
-)
-
-method_configs["blocknerf"] = TrainerConfig(
-    method_name="blocknerf",
-    steps_per_eval_batch=99999999,
-    steps_per_save=99999999,
-    max_num_iterations=0,
-    mixed_precision=True,
-    pipeline=BlockNeRFPipelineConfig(
-        datamanager=BlockNeRFDatamanagerConfig(),
-        model=BlocknerfModelConfig(eval_num_rays_per_chunk=1 << 15),
-    ),
-    optimizers={
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
     vis="viewer",
@@ -230,6 +231,7 @@ method_configs["depth-nerfacto"] = TrainerConfig(
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
             _target=VanillaDataManager[DepthDataset],
+            pixel_sampler=PairPixelSamplerConfig(),
             dataparser=NerfstudioDataParserConfig(),
             train_num_rays_per_batch=4096,
             eval_num_rays_per_batch=4096,
@@ -238,47 +240,6 @@ method_configs["depth-nerfacto"] = TrainerConfig(
             ),
         ),
         model=DepthNerfactoModelConfig(eval_num_rays_per_chunk=1 << 15),
-    ),
-    optimizers={
-        "proposal_networks": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100000),
-        },
-        "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-5, max_steps=100000),
-        },
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-    vis="viewer",
-)
-
-method_configs["volinga"] = TrainerConfig(
-    method_name="volinga",
-    steps_per_eval_batch=500,
-    steps_per_save=2000,
-    max_num_iterations=30000,
-    mixed_precision=True,
-    pipeline=VanillaPipelineConfig(
-        datamanager=VanillaDataManagerConfig(
-            dataparser=NerfstudioDataParserConfig(),
-            train_num_rays_per_batch=4096,
-            eval_num_rays_per_batch=4096,
-            camera_optimizer=CameraOptimizerConfig(
-                mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
-            ),
-        ),
-        model=NerfactoModelConfig(
-            eval_num_rays_per_chunk=1 << 15,
-            hidden_dim=32,
-            hidden_dim_color=32,
-            hidden_dim_transient=32,
-            num_nerf_samples_per_ray=24,
-            proposal_net_args_list=[
-                {"hidden_dim": 16, "log2_hashmap_size": 17, "num_levels": 5, "max_res": 128, "use_linear": True},
-                {"hidden_dim": 16, "log2_hashmap_size": 17, "num_levels": 5, "max_res": 256, "use_linear": True},
-            ],
-        ),
     ),
     optimizers={
         "proposal_networks": {
@@ -318,7 +279,6 @@ method_configs["instant-ngp"] = TrainerConfig(
     vis="viewer",
 )
 
-
 method_configs["instant-ngp-bounded"] = TrainerConfig(
     method_name="instant-ngp-bounded",
     steps_per_eval_batch=500,
@@ -346,7 +306,6 @@ method_configs["instant-ngp-bounded"] = TrainerConfig(
     viewer=ViewerConfig(num_rays_per_chunk=1 << 12),
     vis="viewer",
 )
-
 
 method_configs["mipnerf"] = TrainerConfig(
     method_name="mipnerf",
@@ -399,13 +358,8 @@ method_configs["semantic-nerfw"] = TrainerConfig(
 
 method_configs["vanilla-nerf"] = TrainerConfig(
     method_name="vanilla-nerf",
-    max_num_iterations=250000,
-    steps_per_eval_image=5000,
-    steps_per_eval_all_images=250000,
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
-            train_num_rays_per_batch=4096,
-            eval_num_rays_per_batch=4096,
             dataparser=BlenderDataParserConfig(),
         ),
         model=VanillaModelConfig(_target=NeRFModel),
@@ -413,11 +367,11 @@ method_configs["vanilla-nerf"] = TrainerConfig(
     optimizers={
         "fields": {
             "optimizer": RAdamOptimizerConfig(lr=5e-4, eps=1e-08),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=5e-7, max_steps=250000),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.00001, max_steps=1000000),
         },
         "temporal_distortion": {
             "optimizer": RAdamOptimizerConfig(lr=5e-4, eps=1e-08),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=5e-7, max_steps=250000),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.00001, max_steps=1000000),
         },
     },
 )
@@ -510,66 +464,48 @@ method_configs["phototourism"] = TrainerConfig(
     vis="viewer",
 )
 
-method_configs["nerfplayer-nerfacto"] = TrainerConfig(
-    method_name="nerfplayer-nerfacto",
-    steps_per_eval_batch=500,
-    steps_per_save=2000,
+method_configs["generfacto"] = TrainerConfig(
+    method_name="generfacto",
+    experiment_name="",
+    steps_per_eval_batch=50,
+    steps_per_eval_image=50,
+    steps_per_save=200,
     max_num_iterations=30000,
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
-        datamanager=VanillaDataManagerConfig(
-            _target=VanillaDataManager[DepthDataset],
-            dataparser=DycheckDataParserConfig(),
-            train_num_rays_per_batch=4096,
-            eval_num_rays_per_batch=4096,
-            camera_optimizer=CameraOptimizerConfig(
-                mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
-            ),
+        datamanager=RandomCamerasDataManagerConfig(
+            horizontal_rotation_warmup=3000,
         ),
-        model=NerfplayerNerfactoModelConfig(eval_num_rays_per_chunk=1 << 15),
+        model=GenerfactoModelConfig(
+            eval_num_rays_per_chunk=1 << 15,
+            distortion_loss_mult=1.0,
+            interlevel_loss_mult=100.0,
+            max_res=256,
+            sphere_collider=True,
+            initialize_density=True,
+            taper_range=(0, 2000),
+            random_background=True,
+            proposal_warmup=2000,
+            proposal_update_every=0,
+            proposal_weights_anneal_max_num_iters=2000,
+            start_lambertian_training=500,
+            start_normals_training=2000,
+            opacity_loss_mult=0.001,
+            positional_prompting="discrete",
+            guidance_scale=25,
+        ),
     ),
     optimizers={
         "proposal_networks": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-15),
             "scheduler": None,
         },
         "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15),
             "scheduler": None,
         },
     },
-    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-    vis="viewer",
-)
-
-method_configs["nerfplayer-ngp"] = TrainerConfig(
-    method_name="nerfplayer-ngp",
-    steps_per_eval_batch=500,
-    steps_per_save=2000,
-    max_num_iterations=30000,
-    mixed_precision=True,
-    pipeline=DynamicBatchPipelineConfig(
-        datamanager=VanillaDataManagerConfig(
-            _target=VanillaDataManager[DepthDataset],
-            dataparser=DycheckDataParserConfig(),
-            train_num_rays_per_batch=8192,
-        ),
-        model=NerfplayerNGPModelConfig(
-            eval_num_rays_per_chunk=8192,
-            grid_levels=1,
-            alpha_thre=0.0,
-            render_step_size=0.001,
-            disable_scene_contraction=True,
-            near_plane=0.01,
-        ),
-    ),
-    optimizers={
-        "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": None,
-        }
-    },
-    viewer=ViewerConfig(num_rays_per_chunk=64000),
+    viewer=ViewerConfig(),
     vis="viewer",
 )
 

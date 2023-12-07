@@ -42,7 +42,11 @@ class DepthLossType(Enum):
 
     DS_NERF = 1
     URF = 2
-    EXP = 3
+    SPARSENERF_RANKING = 3
+
+
+FORCE_PSEUDODEPTH_LOSS = False
+PSEUDODEPTH_COMPATIBLE_LOSSES = (DepthLossType.SPARSENERF_RANKING,)
 
 
 def outer(
@@ -78,9 +82,9 @@ def outer(
 
 
 def lossfun_outer(
-    t: Float[Tensor, "*batch num_samples+1"],
+    t: Float[Tensor, "*batch num_samples_1"],
     w: Float[Tensor, "*batch num_samples"],
-    t_env: Float[Tensor, "*batch num_samples+1"],
+    t_env: Float[Tensor, "*batch num_samples_1"],
     w_env: Float[Tensor, "*batch num_samples"],
 ):
     """
@@ -217,36 +221,6 @@ def pred_normal_loss(
     return (weights[..., 0] * (1.0 - torch.sum(normals * pred_normals, dim=-1))).sum(dim=-1)
 
 
-def exp_nerf_depth_loss(
-    weights: Float[Tensor, "*batch num_samples 1"],
-    termination_depth: Float[Tensor, "*batch 1"],
-    predicted_depth: Float[Tensor, "*batch 1"],
-    steps: Float[Tensor, "*batch num_samples 1"],
-    lengths: Float[Tensor, "*batch num_samples 1"],
-    sigma: Float[Tensor, "0"],
-) -> Float[Tensor, "*batch 1"]:
-    """Depth loss from Depth-supervised NeRF (Deng et al., 2022).
-
-    Args:
-        weights: Weights predicted for each sample.
-        termination_depth: Ground truth depth of rays.
-        steps: Sampling distances along rays.
-        lengths: Distances between steps.
-        sigma: Uncertainty around depth values.
-    Returns:
-        Depth loss scalar.
-    """
-    depth_mask = termination_depth > 0
-
-    l2_loss = (termination_depth - predicted_depth) ** 2
-    l2_loss = l2_loss * depth_mask
-
-    loss = -torch.log(weights + EPS) * torch.exp(-((steps - termination_depth[:, None]) ** 2) / (2 * sigma)) * lengths
-    loss = loss.sum(-2) * depth_mask
-
-    return torch.mean(1.*l2_loss + 0.*loss)
-
-
 def ds_nerf_depth_loss(
     weights: Float[Tensor, "*batch num_samples 1"],
     termination_depth: Float[Tensor, "*batch 1"],
@@ -346,10 +320,6 @@ def depth_loss(
 
     if depth_loss_type == DepthLossType.URF:
         return urban_radiance_field_depth_loss(weights, termination_depth, predicted_depth, steps, sigma)
-
-    if depth_loss_type == DepthLossType.EXP:
-        lengths = ray_samples.frustums.ends - ray_samples.frustums.starts
-        return exp_nerf_depth_loss(weights, termination_depth, predicted_depth, steps, lengths, sigma)
 
     raise NotImplementedError("Provided depth loss type not implemented.")
 
@@ -577,7 +547,8 @@ class _GradientScaler(torch.autograd.Function):  # typing: ignore
 
 
 def scale_gradients_by_distance_squared(
-    field_outputs: Dict[FieldHeadNames, torch.Tensor], ray_samples: RaySamples
+    field_outputs: Dict[FieldHeadNames, torch.Tensor],
+    ray_samples: RaySamples,
 ) -> Dict[FieldHeadNames, torch.Tensor]:
     """
     Scale gradients by the ray distance to the pixel
@@ -595,3 +566,16 @@ def scale_gradients_by_distance_squared(
     for key, value in field_outputs.items():
         out[key], _ = cast(Tuple[Tensor, Tensor], _GradientScaler.apply(value, scaling))
     return out
+
+
+def depth_ranking_loss(rendered_depth, gt_depth):
+    """
+    Depth ranking loss as described in the SparseNeRF paper
+    Assumes that the layout of the batch comes from a PairPixelSampler, so that adjacent samples in the gt_depth
+    and rendered_depth are from pixels with a radius of each other
+    """
+    m = 1e-4
+    dpt_diff = gt_depth[::2, :] - gt_depth[1::2, :]
+    out_diff = rendered_depth[::2, :] - rendered_depth[1::2, :] + m
+    differing_signs = torch.sign(dpt_diff) != torch.sign(out_diff)
+    return torch.nanmean((out_diff[differing_signs] * torch.sign(out_diff[differing_signs])))

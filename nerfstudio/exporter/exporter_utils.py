@@ -28,17 +28,12 @@ import open3d as o3d
 import pymeshlab
 import torch
 from jaxtyping import Float
-from rich.progress import (
-    BarColumn,
-    Progress,
-    TaskProgressColumn,
-    TextColumn,
-    TimeRemainingColumn,
-)
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn, TimeRemainingColumn
 from torch import Tensor
 
 from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.data.datasets.base_dataset import InputDataset
+from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.utils.rich_utils import CONSOLE, ItersPerSecColumn
 
@@ -85,12 +80,14 @@ def generate_point_cloud(
     num_points: int = 1000000,
     remove_outliers: bool = True,
     estimate_normals: bool = False,
+    reorient_normals: bool = False,
     rgb_output_name: str = "rgb",
     depth_output_name: str = "depth",
     normal_output_name: Optional[str] = None,
     use_bounding_box: bool = True,
-    bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0),
-    bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    bounding_box_min: Optional[Tuple[float, float, float]] = None,
+    bounding_box_max: Optional[Tuple[float, float, float]] = None,
+    crop_obb: Optional[OrientedBox] = None,
     std_ratio: float = 10.0,
 ) -> o3d.geometry.PointCloud:
     """Generate a point cloud from a nerf.
@@ -99,6 +96,7 @@ def generate_point_cloud(
         pipeline: Pipeline to evaluate with.
         num_points: Number of points to generate. May result in less if outlier removal is used.
         remove_outliers: Whether to remove outliers.
+        reorient_normals: Whether to re-orient the normals based on the view direction.
         estimate_normals: Whether to estimate normals.
         rgb_output_name: Name of the RGB output.
         depth_output_name: Name of the depth output.
@@ -122,6 +120,9 @@ def generate_point_cloud(
     points = []
     rgbs = []
     normals = []
+    view_directions = []
+    if use_bounding_box and (crop_obb is not None and bounding_box_max is not None):
+        CONSOLE.print("Provided aabb and crop_obb at the same time, using only the obb", style="bold yellow")
     with progress as progress_bar:
         task = progress_bar.add_task("Generating Point Cloud", total=num_points)
         while not progress_bar.finished:
@@ -140,7 +141,7 @@ def generate_point_cloud(
                 CONSOLE.print(f"Could not find {depth_output_name} in the model outputs", justify="center")
                 CONSOLE.print(f"Please set --depth_output_name to one of: {outputs.keys()}", justify="center")
                 sys.exit(1)
-            rgb = outputs[rgb_output_name]
+            rgba = pipeline.model.get_rgba_image(outputs, rgb_output_name)
             depth = outputs[depth_output_name]
             if normal_output_name is not None:
                 if normal_output_name not in outputs:
@@ -154,26 +155,41 @@ def generate_point_cloud(
                 ), "Normal values from method output must be in [0, 1]"
                 normal = (normal * 2.0) - 1.0
             point = ray_bundle.origins + ray_bundle.directions * depth
+            view_direction = ray_bundle.directions
+
+            # Filter points with opacity lower than 0.5
+            mask = rgba[..., -1] > 0.5
+            point = point[mask]
+            view_direction = view_direction[mask]
+            rgb = rgba[mask][..., :3]
+            if normal is not None:
+                normal = normal[mask]
 
             if use_bounding_box:
-                comp_l = torch.tensor(bounding_box_min, device=point.device)
-                comp_m = torch.tensor(bounding_box_max, device=point.device)
-                assert torch.all(
-                    comp_l < comp_m
-                ), f"Bounding box min {bounding_box_min} must be smaller than max {bounding_box_max}"
-                mask = torch.all(torch.concat([point > comp_l, point < comp_m], dim=-1), dim=-1)
+                if crop_obb is None:
+                    comp_l = torch.tensor(bounding_box_min, device=point.device)
+                    comp_m = torch.tensor(bounding_box_max, device=point.device)
+                    assert torch.all(
+                        comp_l < comp_m
+                    ), f"Bounding box min {bounding_box_min} must be smaller than max {bounding_box_max}"
+                    mask = torch.all(torch.concat([point > comp_l, point < comp_m], dim=-1), dim=-1)
+                else:
+                    mask = crop_obb.within(point)
                 point = point[mask]
                 rgb = rgb[mask]
+                view_direction = view_direction[mask]
                 if normal is not None:
                     normal = normal[mask]
 
             points.append(point)
             rgbs.append(rgb)
+            view_directions.append(view_direction)
             if normal is not None:
                 normals.append(normal)
             progress.advance(task, point.shape[0])
     points = torch.cat(points, dim=0)
     rgbs = torch.cat(rgbs, dim=0)
+    view_directions = torch.cat(view_directions, dim=0).cpu()
 
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points.double().cpu().numpy())
@@ -185,6 +201,8 @@ def generate_point_cloud(
         pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=std_ratio)
         print("\033[A\033[A")
         CONSOLE.print("[bold green]:white_check_mark: Cleaning Point Cloud")
+        if ind is not None:
+            view_directions = view_directions[ind]
 
     # either estimate_normals or normal_output_name, not both
     if estimate_normals:
@@ -203,6 +221,13 @@ def generate_point_cloud(
             normals = normals[ind]
         pcd.normals = o3d.utility.Vector3dVector(normals.double().cpu().numpy())
 
+    # re-orient the normals
+    if reorient_normals:
+        normals = torch.from_numpy(np.array(pcd.normals)).float()
+        mask = torch.sum(view_directions * normals, dim=-1) > 0
+        normals[mask] *= -1
+        pcd.normals = o3d.utility.Vector3dVector(normals.double().cpu().numpy())
+
     return pcd
 
 
@@ -213,6 +238,8 @@ def render_trajectory(
     depth_output_name: str,
     rendered_resolution_scaling_factor: float = 1.0,
     disable_distortion: bool = False,
+    return_rgba_images: bool = False,
+    render_mask: bool = True,
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """Helper function to create a video of a trajectory.
 
@@ -223,11 +250,14 @@ def render_trajectory(
         depth_output_name: Name of the depth output.
         rendered_resolution_scaling_factor: Scaling factor to apply to the camera image resolution.
         disable_distortion: Whether to disable distortion.
+        return_rgba_images: Whether to return RGBA images (default RGB).
+        render_mask: Whether to return geometry masks as well
 
     Returns:
-        List of rgb images, list of depth images.
+        List of rgb images, list of depth images, and possibly masks/
     """
     images = []
+    masks = []
     depths = []
     cameras.rescale_output_resolution(rendered_resolution_scaling_factor)
 
@@ -244,7 +274,7 @@ def render_trajectory(
                 camera_indices=camera_idx, disable_distortion=disable_distortion
             ).to(pipeline.device)
             with torch.no_grad():
-                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle, render_mask=render_mask)
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
                 CONSOLE.print(f"Could not find {rgb_output_name} in the model outputs", justify="center")
@@ -255,8 +285,17 @@ def render_trajectory(
                 CONSOLE.print(f"Could not find {depth_output_name} in the model outputs", justify="center")
                 CONSOLE.print(f"Please set --depth_output_name to one of: {outputs.keys()}", justify="center")
                 sys.exit(1)
-            images.append(outputs[rgb_output_name].cpu().numpy())
+            if return_rgba_images:
+                image = pipeline.model.get_rgba_image(outputs, rgb_output_name)
+            else:
+                image = outputs[rgb_output_name]
+            if render_mask:
+                mask = outputs["mask"]
+                masks.append(mask.cpu().numpy())
+            images.append(image.cpu().numpy())
             depths.append(outputs[depth_output_name].cpu().numpy())
+    if render_mask:
+        return images, depths, masks
     return images, depths
 
 

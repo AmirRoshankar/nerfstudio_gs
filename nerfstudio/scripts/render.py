@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+import shutil
 import sys
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -53,12 +54,13 @@ from nerfstudio.cameras.camera_paths import (
 )
 from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
-from nerfstudio.data.scene_box import SceneBox
+from nerfstudio.data.scene_box import OrientedBox
 from nerfstudio.model_components import renderers
 from nerfstudio.pipelines.base_pipeline import Pipeline
 from nerfstudio.utils import colormaps, install_checks
 from nerfstudio.utils.eval_utils import eval_setup
 from nerfstudio.utils.rich_utils import CONSOLE, ItersPerSecColumn
+from nerfstudio.utils.scripts import run_command
 
 
 def _render_trajectory_video(
@@ -72,6 +74,8 @@ def _render_trajectory_video(
     output_format: Literal["images", "video"] = "video",
     image_format: Literal["jpeg", "png"] = "jpeg",
     jpeg_quality: int = 100,
+    depth_near_plane: Optional[float] = None,
+    depth_far_plane: Optional[float] = None,
     colormap_options: colormaps.ColormapOptions = colormaps.ColormapOptions(),
 ) -> None:
     """Helper function to create a video of the spiral trajectory.
@@ -85,6 +89,8 @@ def _render_trajectory_video(
         rendered_resolution_scaling_factor: Scaling factor to apply to the camera image resolution.
         seconds: Length of output video.
         output_format: How to save output data.
+        depth_near_plane: Closest depth to consider when using the colormap for depth. If None, use min value.
+        depth_far_plane: Furthest depth to consider when using the colormap for depth. If None, use max value.
         colormap_options: Options for colormap.
     """
     CONSOLE.print("[bold green]Creating trajectory " + output_format)
@@ -121,12 +127,10 @@ def _render_trajectory_video(
 
         with progress:
             for camera_idx in progress.track(range(cameras.size), description=""):
-                aabb_box = None
+                obb_box = None
                 if crop_data is not None:
-                    bounding_box_min = crop_data.center - crop_data.scale / 2.0
-                    bounding_box_max = crop_data.center + crop_data.scale / 2.0
-                    aabb_box = SceneBox(torch.stack([bounding_box_min, bounding_box_max]).to(pipeline.device))
-                camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx, aabb_box=aabb_box)
+                    obb_box = crop_data.obb
+                camera_ray_bundle = cameras.generate_rays(camera_indices=camera_idx, obb_box=obb_box)
 
                 if crop_data is not None:
                     with renderers.background_color_override_context(
@@ -147,14 +151,28 @@ def _render_trajectory_video(
                         )
                         sys.exit(1)
                     output_image = outputs[rendered_output_name]
-                    output_image = (
-                        colormaps.apply_colormap(
-                            image=output_image,
-                            colormap_options=colormap_options,
+                    is_depth = rendered_output_name.find("depth") != -1
+                    if is_depth:
+                        output_image = (
+                            colormaps.apply_depth_colormap(
+                                output_image,
+                                accumulation=outputs["accumulation"],
+                                near_plane=depth_near_plane,
+                                far_plane=depth_far_plane,
+                                colormap_options=colormap_options,
+                            )
+                            .cpu()
+                            .numpy()
                         )
-                        .cpu()
-                        .numpy()
-                    )
+                    else:
+                        output_image = (
+                            colormaps.apply_colormap(
+                                image=output_image,
+                                colormap_options=colormap_options,
+                            )
+                            .cpu()
+                            .numpy()
+                        )
                     render_image.append(output_image)
                 render_image = np.concatenate(render_image, axis=1)
                 if output_format == "images":
@@ -269,10 +287,17 @@ class CropData:
 
     background_color: Float[Tensor, "3"] = torch.Tensor([0.0, 0.0, 0.0])
     """background color"""
-    center: Float[Tensor, "3"] = torch.Tensor([0.0, 0.0, 0.0])
-    """center of the crop"""
-    scale: Float[Tensor, "3"] = torch.Tensor([2.0, 2.0, 2.0])
-    """scale of the crop"""
+    obb: OrientedBox = OrientedBox(R=torch.eye(3), T=torch.zeros(3), S=torch.ones(3) * 2)
+    """Oriented box representing the crop region"""
+
+    # properties for backwards-compatibility interface
+    @property
+    def center(self):
+        return self.obb.T
+
+    @property
+    def scale(self):
+        return self.obb.S
 
 
 def get_crop_from_json(camera_json: Dict[str, Any]) -> Optional[CropData]:
@@ -285,13 +310,13 @@ def get_crop_from_json(camera_json: Dict[str, Any]) -> Optional[CropData]:
     """
     if "crop" not in camera_json or camera_json["crop"] is None:
         return None
-
     bg_color = camera_json["crop"]["crop_bg_color"]
-
+    center = camera_json["crop"]["crop_center"]
+    scale = camera_json["crop"]["crop_scale"]
+    rot = (0.0, 0.0, 0.0) if "crop_rot" not in camera_json["crop"] else tuple(camera_json["crop"]["crop_rot"])
     return CropData(
         background_color=torch.Tensor([bg_color["r"] / 255.0, bg_color["g"] / 255.0, bg_color["b"] / 255.0]),
-        center=torch.Tensor(camera_json["crop"]["crop_center"]),
-        scale=torch.Tensor(camera_json["crop"]["crop_scale"]),
+        obb=OrientedBox.from_params(center, rot, scale),
     )
 
 
@@ -311,6 +336,12 @@ class BaseRender:
     """Scaling factor to apply to the camera image resolution."""
     eval_num_rays_per_chunk: Optional[int] = None
     """Specifies number of rays per chunk during eval. If None, use the value in the config file."""
+    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
+    """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
+    depth_near_plane: Optional[float] = None
+    """Closest depth to consider when using the colormap for depth. If None, use min value."""
+    depth_far_plane: Optional[float] = None
+    """Furthest depth to consider when using the colormap for depth. If None, use max value."""
     colormap_options: colormaps.ColormapOptions = colormaps.ColormapOptions()
     """Colormap options."""
 
@@ -319,8 +350,6 @@ class BaseRender:
 class RenderCameraPath(BaseRender):
     """Render a camera path generated by the viewer or blender add-on."""
 
-    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
-    """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
     camera_path_filename: Path = Path("camera_path.json")
     """Filename of the camera path to render."""
     output_format: Literal["images", "video"] = "video"
@@ -342,6 +371,29 @@ class RenderCameraPath(BaseRender):
         crop_data = get_crop_from_json(camera_path)
         camera_path = get_path_from_json(camera_path)
 
+        if (
+            camera_path.camera_type[0] == CameraType.OMNIDIRECTIONALSTEREO_L.value
+            or camera_path.camera_type[0] == CameraType.VR180_L.value
+        ):
+            # temp folder for writing left and right view renders
+            temp_folder_path = self.output_path.parent / (self.output_path.stem + "_temp")
+
+            Path(temp_folder_path).mkdir(parents=True, exist_ok=True)
+            left_eye_path = temp_folder_path / "render_left.mp4"
+
+            self.output_path = left_eye_path
+
+            if camera_path.camera_type[0] == CameraType.OMNIDIRECTIONALSTEREO_L.value:
+                CONSOLE.print("[bold green]:goggles: Omni-directional Stereo VR :goggles:")
+            else:
+                CONSOLE.print("[bold green]:goggles: VR180 :goggles:")
+
+            CONSOLE.print("Rendering left eye view")
+
+        # add mp4 suffix to video output if none is specified
+        if self.output_format == "video" and str(self.output_path.suffix) == "":
+            self.output_path = self.output_path.with_suffix(".mp4")
+
         _render_trajectory_video(
             pipeline,
             camera_path,
@@ -353,16 +405,93 @@ class RenderCameraPath(BaseRender):
             output_format=self.output_format,
             image_format=self.image_format,
             jpeg_quality=self.jpeg_quality,
+            depth_near_plane=self.depth_near_plane,
+            depth_far_plane=self.depth_far_plane,
             colormap_options=self.colormap_options,
         )
+
+        if (
+            camera_path.camera_type[0] == CameraType.OMNIDIRECTIONALSTEREO_L.value
+            or camera_path.camera_type[0] == CameraType.VR180_L.value
+        ):
+            # declare paths for left and right renders
+
+            left_eye_path = self.output_path
+            right_eye_path = left_eye_path.parent / "render_right.mp4"
+
+            self.output_path = right_eye_path
+
+            if camera_path.camera_type[0] == CameraType.OMNIDIRECTIONALSTEREO_L.value:
+                camera_path.camera_type[0] = CameraType.OMNIDIRECTIONALSTEREO_R.value
+            else:
+                camera_path.camera_type[0] = CameraType.VR180_R.value
+
+            CONSOLE.print("Rendering right eye view")
+            _render_trajectory_video(
+                pipeline,
+                camera_path,
+                output_filename=self.output_path,
+                rendered_output_names=self.rendered_output_names,
+                rendered_resolution_scaling_factor=1.0 / self.downscale_factor,
+                crop_data=crop_data,
+                seconds=seconds,
+                output_format=self.output_format,
+                image_format=self.image_format,
+                jpeg_quality=self.jpeg_quality,
+                depth_near_plane=self.depth_near_plane,
+                depth_far_plane=self.depth_far_plane,
+                colormap_options=self.colormap_options,
+            )
+
+            self.output_path = Path(str(left_eye_path.parent)[:-5] + ".mp4")
+
+            if camera_path.camera_type[0] == CameraType.OMNIDIRECTIONALSTEREO_R.value:
+                # stack the left and right eye renders vertically for ODS final output
+                ffmpeg_ods_command = ""
+                if self.output_format == "video":
+                    ffmpeg_ods_command = f'ffmpeg -y -i "{left_eye_path}" -i "{right_eye_path}" -filter_complex "[0:v]pad=iw:2*ih[int];[int][1:v]overlay=0:h" -c:v libx264 -crf 23 -preset veryfast "{self.output_path}"'
+                    run_command(ffmpeg_ods_command, verbose=False)
+                if self.output_format == "images":
+                    # create a folder for the stacked renders
+                    self.output_path = Path(str(left_eye_path.parent)[:-5])
+                    self.output_path.mkdir(parents=True, exist_ok=True)
+                    if self.image_format == "png":
+                        ffmpeg_ods_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.png")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.png")}" -filter_complex vstack -start_number 0 "{str(self.output_path)+"//%05d.png"}"'
+                    elif self.image_format == "jpeg":
+                        ffmpeg_ods_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.jpg")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.jpg")}" -filter_complex vstack -start_number 0 "{str(self.output_path)+"//%05d.jpg"}"'
+                    run_command(ffmpeg_ods_command, verbose=False)
+
+                # remove the temp files directory
+                if str(left_eye_path.parent)[-5:] == "_temp":
+                    shutil.rmtree(left_eye_path.parent, ignore_errors=True)
+                CONSOLE.print("[bold green]Final ODS Render Complete")
+            else:
+                # stack the left and right eye renders horizontally for VR180 final output
+                self.output_path = Path(str(left_eye_path.parent)[:-5] + ".mp4")
+                ffmpeg_vr180_command = ""
+                if self.output_format == "video":
+                    ffmpeg_vr180_command = f'ffmpeg -y -i "{right_eye_path}" -i "{left_eye_path}" -filter_complex "[1:v]hstack=inputs=2" -c:a copy "{self.output_path}"'
+                    run_command(ffmpeg_vr180_command, verbose=False)
+                if self.output_format == "images":
+                    # create a folder for the stacked renders
+                    self.output_path = Path(str(left_eye_path.parent)[:-5])
+                    self.output_path.mkdir(parents=True, exist_ok=True)
+                    if self.image_format == "png":
+                        ffmpeg_vr180_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.png")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.png")}" -filter_complex hstack -start_number 0 "{str(self.output_path)+"//%05d.png"}"'
+                    elif self.image_format == "jpeg":
+                        ffmpeg_vr180_command = f'ffmpeg -y -pattern_type glob -i "{str(left_eye_path.with_suffix("") / "*.jpg")}"  -pattern_type glob -i "{str(right_eye_path.with_suffix("") / "*.jpg")}" -filter_complex hstack -start_number 0 "{str(self.output_path)+"//%05d.jpg"}"'
+                    run_command(ffmpeg_vr180_command, verbose=False)
+
+                # remove the temp files directory
+                if str(left_eye_path.parent)[-5:] == "_temp":
+                    shutil.rmtree(left_eye_path.parent, ignore_errors=True)
+                CONSOLE.print("[bold green]Final VR180 Render Complete")
 
 
 @dataclass
 class RenderInterpolated(BaseRender):
     """Render a trajectory that interpolates between training or eval dataset images."""
 
-    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
-    """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
     pose_source: Literal["eval", "train"] = "eval"
     """Pose source to render."""
     interpolation_steps: int = 10
@@ -406,6 +535,9 @@ class RenderInterpolated(BaseRender):
             rendered_resolution_scaling_factor=1.0 / self.downscale_factor,
             seconds=seconds,
             output_format=self.output_format,
+            image_format=self.image_format,
+            depth_near_plane=self.depth_near_plane,
+            depth_far_plane=self.depth_far_plane,
             colormap_options=self.colormap_options,
         )
 
@@ -414,8 +546,6 @@ class RenderInterpolated(BaseRender):
 class SpiralRender(BaseRender):
     """Render a spiral trajectory (often not great)."""
 
-    rendered_output_names: List[str] = field(default_factory=lambda: ["rgb"])
-    """Name of the renderer outputs to use. rgb, depth, etc. concatenates them along y axis"""
     seconds: float = 3.0
     """How long the video should be."""
     output_format: Literal["images", "video"] = "video"
@@ -448,6 +578,9 @@ class SpiralRender(BaseRender):
             rendered_resolution_scaling_factor=1.0 / self.downscale_factor,
             seconds=self.seconds,
             output_format=self.output_format,
+            image_format=self.image_format,
+            depth_near_plane=self.depth_near_plane,
+            depth_far_plane=self.depth_far_plane,
             colormap_options=self.colormap_options,
         )
 

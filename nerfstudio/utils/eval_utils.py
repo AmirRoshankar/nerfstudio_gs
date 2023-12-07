@@ -25,6 +25,7 @@ from typing import Literal, Optional, Tuple
 import torch
 import yaml
 
+from nerfstudio.configs.method_configs import all_methods
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManagerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.pipelines.base_pipeline import Pipeline
@@ -68,7 +69,6 @@ def eval_setup(
     config_path: Path,
     eval_num_rays_per_chunk: Optional[int] = None,
     test_mode: Literal["test", "val", "inference"] = "test",
-    force_device: str = None,
 ) -> Tuple[TrainerConfig, Pipeline, Path, int]:
     """Shared setup for loading a saved pipeline for evaluation.
 
@@ -79,7 +79,6 @@ def eval_setup(
             'val': loads train/val datasets into memory
             'test': loads train/test dataset into memory
             'inference': does not load any dataset into memory
-        force_device: cuda or cpu
 
 
     Returns:
@@ -89,6 +88,7 @@ def eval_setup(
     config = yaml.load(config_path.read_text(), Loader=yaml.Loader)
     assert isinstance(config, TrainerConfig)
 
+    config.pipeline.datamanager._target = all_methods[config.method_name].pipeline.datamanager._target
     if eval_num_rays_per_chunk:
         config.pipeline.model.eval_num_rays_per_chunk = eval_num_rays_per_chunk
 
@@ -99,10 +99,7 @@ def eval_setup(
         config.pipeline.datamanager.eval_image_indices = None
 
     # setup pipeline (which includes the DataManager)
-    if force_device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(force_device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pipeline = config.pipeline.setup(device=device, test_mode=test_mode)
     assert isinstance(pipeline, Pipeline)
     pipeline.eval()

@@ -28,6 +28,7 @@ from nerfstudio.viewer.server.viewer_elements import (
     ViewerRGB,
     ViewerSlider,
     ViewerVec3,
+    ViewerVec2
 )
 from nerfstudio.viewer.viser import ViserServer
 
@@ -51,11 +52,24 @@ class ControlPanel:
         crop_update_cb: Callable,
         update_output_cb: Callable,
         update_split_output_cb: Callable,
+        layer_update_cb: Callable = None,
+        view_mode_cb: Callable = None,
     ):
         # elements holds a mapping from tag: [elements]
         self.viser_server = viser_server
         self._elements_by_tag: DefaultDict[str, List[ViewerElement]] = defaultdict(lambda: [])
 
+        self._viewer_mode = ViewerButtonGroup(
+            name="Visualization Mode  ",
+            default_value="Intensity",
+            options=["Intensity", "Depth"],
+            cb_hook=view_mode_cb,
+        )
+
+        self._layer_range = ViewerVec2(
+            "Layer Range", (0, 0), cb_hook=layer_update_cb, hint="Layer range for rendering"
+        )
+        
         self._train_speed = ViewerButtonGroup(
             name="Train Speed  ",
             default_value="Balanced",
@@ -139,6 +153,8 @@ class ControlPanel:
         self._time = ViewerSlider("Time", 0.0, 0.0, 1.0, 0.01, cb_hook=rerender_cb, hint="Time to render")
         self._time_enabled = time_enabled
 
+        self.add_element(self._viewer_mode)
+        self.add_element(self._layer_range)
         self.add_element(self._train_speed)
         self.add_element(self._train_util)
         with self.viser_server.gui_folder("Render Options"):
@@ -284,6 +300,16 @@ class ControlPanel:
         self._crop_viewport.value = value
 
     @property
+    def layer_range(self) -> Tuple[int, int]:
+        """Returns the layer range"""
+        return self._layer_range.value
+    
+    @property
+    def viewer_mode(self) -> str:
+        """Returns the viewer mode"""
+        return self._viewer_mode.value
+
+    @property
     def crop_min(self) -> Tuple[float, float, float]:
         """Returns the current crop min setting"""
         return self._crop_min.value
@@ -361,7 +387,7 @@ def _get_colormap_options(dimensions: int, dtype: type) -> List[Colormaps]:
     if dimensions == 3:
         colormap_options = ["default"]
     if dimensions == 1 and dtype == torch.float:
-        colormap_options = [c for c in list(get_args(Colormaps)) if c != "default"]
+        colormap_options = [c for c in list(get_args(Colormaps)) if c not in ("default", "pca")]
     if dimensions > 3:
         colormap_options = ["pca"]
     return colormap_options

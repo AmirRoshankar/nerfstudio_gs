@@ -17,7 +17,7 @@ Collection of sampling strategies
 """
 
 from abc import abstractmethod
-from typing import Callable, List, Optional, Protocol, Tuple, Union
+from typing import Any, Callable, List, Optional, Protocol, Tuple, Union
 
 import torch
 from jaxtyping import Float
@@ -42,10 +42,10 @@ class Sampler(nn.Module):
         self.num_samples = num_samples
 
     @abstractmethod
-    def generate_ray_samples(self) -> RaySamples:
+    def generate_ray_samples(self) -> Any:
         """Generate Ray Samples"""
 
-    def forward(self, *args, **kwargs) -> RaySamples:
+    def forward(self, *args, **kwargs) -> Any:
         """Generate ray samples"""
         return self.generate_ray_samples(*args, **kwargs)
 
@@ -505,14 +505,13 @@ class VolumetricSampler(Sampler):
         if camera_indices is not None:
             camera_indices = camera_indices[ray_indices]
 
-        zeros = torch.zeros_like(origins[:, :1])
         ray_samples = RaySamples(
             frustums=Frustums(
                 origins=origins,
                 directions=dirs,
                 starts=starts[..., None],
                 ends=ends[..., None],
-                pixel_area=zeros,
+                pixel_area=ray_bundle[ray_indices].pixel_area,
             ),
             camera_indices=camera_indices,
         )

@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 from torch import nn
@@ -50,6 +50,8 @@ class ModelConfig(InstantiateConfig):
     """parameters to instantiate density field with"""
     eval_num_rays_per_chunk: int = 4096
     """specifies number of rays per chunk during eval"""
+    prompt: Optional[str] = None
+    """A prompt to be used in text to NeRF models"""
 
 
 class Model(nn.Module):
@@ -115,7 +117,7 @@ class Model(nn.Module):
         """
 
     @abstractmethod
-    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def get_outputs(self, ray_bundle: RayBundle) -> Dict[str, Union[torch.Tensor, List]]:
         """Takes in a Ray Bundle and returns a dictionary of outputs.
 
         Args:
@@ -126,7 +128,7 @@ class Model(nn.Module):
             Outputs of model. (ie. rendered colors)
         """
 
-    def forward(self, ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def forward(self, ray_bundle: RayBundle) -> Dict[str, Union[torch.Tensor, List]]:
         """Run forward starting with a ray bundle. This outputs different things depending on the configuration
         of the model and whether or not the batch is provided (whether or not we are training basically)
 
@@ -160,7 +162,7 @@ class Model(nn.Module):
         """
 
     @torch.no_grad()
-    def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle) -> Dict[str, torch.Tensor]:
+    def get_outputs_for_camera_ray_bundle(self, camera_ray_bundle: RayBundle, render_mask: bool = True) -> Dict[str, torch.Tensor]:
         """Takes in camera parameters and computes the output of the model.
 
         Args:
@@ -184,6 +186,30 @@ class Model(nn.Module):
         for output_name, outputs_list in outputs_lists.items():
             outputs[output_name] = torch.cat(outputs_list).view(image_height, image_width, -1)  # type: ignore
         return outputs
+
+    def get_rgba_image(self, outputs: Dict[str, torch.Tensor], output_name: str = "rgb") -> torch.Tensor:
+        """Returns the RGBA image from the outputs of the model.
+
+        Args:
+            outputs: Outputs of the model.
+
+        Returns:
+            RGBA image.
+        """
+        accumulation_name = output_name.replace("rgb", "accumulation")
+        if (
+            not hasattr(self, "renderer_rgb")
+            or not hasattr(self.renderer_rgb, "background_color")
+            or accumulation_name not in outputs
+        ):
+            raise NotImplementedError(f"get_rgba_image is not implemented for model {self.__class__.__name__}")
+        rgb = outputs[output_name]
+        if self.renderer_rgb.background_color == "random":  # type: ignore
+            acc = outputs[accumulation_name]
+            if acc.dim() < rgb.dim():
+                acc = acc.unsqueeze(-1)
+            return torch.cat((rgb / acc.clamp(min=1e-10), acc), dim=-1)
+        return torch.cat((rgb, torch.ones_like(rgb[..., :1])), dim=-1)
 
     @abstractmethod
     def get_image_metrics_and_images(
