@@ -1,0 +1,38 @@
+###### DEMO INSTRUCTIONS ######
+###############################
+
+1. Follow the instructions for installing the conda environment for the original 
+version of the viewer modified for Gaussian Splatting
+
+2. Clone my repository:
+    git clone https://github.com/AmirRoshankar/nerfstudio_gs.git
+
+3. Checkout the demo branch:
+    git checkout brain_demo
+
+4. Create an alias for ease of use of the script:
+    alias gvisL="python nerfstudio/scripts/gaussian_splatting/run_viewer_layered.py --model_path"
+
+5. Launch the viewer. For the demo on Dec 8th, the [path_to_layered_output] 
+is "/pub0/data/gaussian_splats_data/demo/brats_rand_background_delayed_more/"
+    gvisL [path_to_layered_output]
+
+6. Controls:
+    Use left click hold and drag to rotate.
+    Use right click hold and drag to translate.
+    Scroll to zoom in and out of the scene.
+    Toggle "Intensity" or "Depth" to see respective views
+    Select layer range desired on right-hand side.
+    Layer ranges are shown as floats, but this is not a problem, just input ints
+    For the demo on Dec 8th, min layer range is [0, max layer] inclusive
+    Max layer is in range [min layer, 113] inclusive
+
+7. Important:
+    Invalid ranges will cause the viewer to crash.
+    If this happens, correcting the ranges sometimes fixes it.
+    If this doesn't work, relaunch the viewer.
+
+
+
+
+

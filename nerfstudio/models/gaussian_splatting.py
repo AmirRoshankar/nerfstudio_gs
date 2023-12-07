@@ -386,8 +386,7 @@ class GaussianSplattingLayered(Model):
         """      
         # bg_color = torch.rand_like(bg_color)
         
-        print("geom flag", constants.GEOM_FLAG)
-        print("layer range", constants.LAYER_RANGE)
+        
         # correct layer range
         if constants.LAYER_RANGE[0] >= pc.num_layers:
             constants.LAYER_RANGE[0] = pc.num_layers - 1
