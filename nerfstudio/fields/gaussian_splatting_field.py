@@ -28,7 +28,7 @@ from nerfstudio.utils.gaussian_splatting_general_utils import inverse_sigmoid, g
 from plyfile import PlyData, PlyElement
 from simple_knn._C import distCUDA2
 
-
+# Includes geometry opacity, as explained in the gaussial splatting training repository
 class GaussianSplattingField(Field):
     def __init__(self, sh_degree: int):
         super().__init__()
@@ -148,6 +148,7 @@ class GaussianSplattingField(Field):
     def get_covariance(self, scaling_modifier=1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
+# Layered version of GaussianSplattingField
 class GaussianSplattingFieldLayered(Field):
     def __init__(self, sh_degree: int, num_layers : int):
         super().__init__()
@@ -161,7 +162,7 @@ class GaussianSplattingFieldLayered(Field):
         self._scaling = torch.empty(0)
         self._rotation = torch.empty(0)
         self._opacity = torch.empty(0)
-        self._geometry_opacity = torch.empty(0)
+        self._geometry_opacity = torch.empty(0) 
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
@@ -194,9 +195,13 @@ class GaussianSplattingFieldLayered(Field):
     def get_covariance(self, scaling_modifier=1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)  
     
+    # Get model for a given key
     def __getitem__(self, key):
         return self.models[key]
-        
+    
+    # Get different attributes for given model indices
+    ##################################################
+    
     def get_scaling(self, model_idxs=None):
         if model_idxs is None:
             model_idxs = range(0, len(self.models))
@@ -270,6 +275,7 @@ class GaussianSplattingFieldLayered(Field):
         spatial_lr_scales = [self.models[m].spatial_lr_scale for m in model_idxs]
         return torch.tensor(spatial_lr_scales)
     
+    # Load ply for every layer model
     def load_ply(self, paths, load_iteration):
         for i, sub_path in enumerate(paths):
             path = os.path.join(sub_path, "point_cloud", "iteration_" + str(load_iteration), "point_cloud.ply")

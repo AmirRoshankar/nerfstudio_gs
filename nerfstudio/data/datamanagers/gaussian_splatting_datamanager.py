@@ -19,6 +19,7 @@ class GaussianSplattingDatamanagerConfig(DataManagerConfig):
 
     camera_optimizer: Any = None
     
+# Layered version of the GaussianSplattingDatamanagerConfig class
 @dataclass
 class GaussianSplattingDatamanagerConfigLayered(DataManagerConfig):
     _target: Type = field(default_factory=lambda: GaussianSplattingDatamanagerLayered)
@@ -63,6 +64,7 @@ class GaussianSplattingDatamanager(DataManager):
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         return {}
     
+# Layered version of GaussianSplattingDatamanager class
 class GaussianSplattingDatamanagerLayered(DataManager):
 
     def __init__(self, model_path: str, orientation_transform):

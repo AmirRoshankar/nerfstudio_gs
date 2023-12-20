@@ -125,7 +125,8 @@ class GaussianSplattingDataset(InputDataset):
     @property
     def image_filenames(self) -> List[Path]:
         return self.filenames
-    
+
+# Layered version of the GaussianSplattingDataset class
 class GaussianSplattingDatasetLayered(InputDataset):
 
     def __init__(self, model_path: str, orientation_transform):
@@ -134,8 +135,7 @@ class GaussianSplattingDatasetLayered(InputDataset):
         if orientation_transform is not None:
             orientation_transform = orientation_transform.cpu().numpy()
 
-        # load camera data
-        #TODO AMIR: fix
+        # load camera data by searching layers for valid cameras.json files
         cameras_json_path = ""
         for subpath in os.listdir(model_path):
             if not os.path.isdir(os.path.join(model_path, subpath)):

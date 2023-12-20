@@ -28,7 +28,6 @@ class GaussianSplattingModelConfig(ModelConfig):
     )
 
     background_color: str = "black"
-
     sh_degree: int = 3
     
 @dataclass
@@ -155,11 +154,11 @@ class GaussianSplatting(Model):
 
         Background tensor (bg_color) must be on GPU!
         """
-        # bg_color = torch.rand_like(bg_color)
-        
+        # Flipping orientation of gaussian
+        # # TODO: eliminate this or also flip scalings and rotations since this is innacurate        
         flipped_xyz = pc.get_xyz
-        flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
-        flipped_xyz[..., 1] = -flipped_xyz[..., 1]
+        # flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
+        # flipped_xyz[..., 1] = -flipped_xyz[..., 1]
         
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
         screenspace_points = torch.zeros_like(flipped_xyz, dtype=flipped_xyz.dtype, requires_grad=True,
@@ -273,6 +272,7 @@ class GaussianSplatting(Model):
                 "visibility_filter": radii > 0,
                 "radii": radii}
         
+# Layered version of the GaussianSplatting class
 class GaussianSplattingLayered(Model):
     config: GaussianSplattingModelConfigLayered
     model_path: str
@@ -314,14 +314,9 @@ class GaussianSplattingLayered(Model):
             self.load_iteration = self.search_for_max_iteration(os.path.join(self.sub_paths[0], "point_cloud"))
         print("Loading trained model at iteration {}".format(self.load_iteration))
 
-        # load gaussian model
+        # load composite gaussian model
         self.gaussian_model = GaussianSplattingFieldLayered(sh_degree=self.config.sh_degree, num_layers=self.num_layers)
-
         self.gaussian_model.load_ply(self.sub_paths, self.load_iteration)
-        #os.path.join(self.model_path,
-            # "point_cloud",
-            # "iteration_" + str(self.load_iteration),
-            # "point_cloud.ply")
 
     @staticmethod
     def search_for_max_iteration(folder):
@@ -403,8 +398,8 @@ class GaussianSplattingLayered(Model):
         flipped_xyz_all = pc.get_xyz(model_idxs)
         flipped_xyz = flipped_xyz_all[~(torch.isnan(flipped_xyz_all).any(dim=1))]
 
-        flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
-        flipped_xyz[..., 1] = -flipped_xyz[..., 1]
+        # flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
+        # flipped_xyz[..., 1] = -flipped_xyz[..., 1]
         
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
         screenspace_points = torch.zeros_like(flipped_xyz, dtype=flipped_xyz.dtype, requires_grad=True,

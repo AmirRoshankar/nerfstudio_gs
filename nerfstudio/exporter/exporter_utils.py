@@ -239,7 +239,7 @@ def render_trajectory(
     rendered_resolution_scaling_factor: float = 1.0,
     disable_distortion: bool = False,
     return_rgba_images: bool = False,
-    render_mask: bool = True,
+    render_mask: bool = True, 
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
     """Helper function to create a video of a trajectory.
 
@@ -274,7 +274,7 @@ def render_trajectory(
                 camera_indices=camera_idx, disable_distortion=disable_distortion
             ).to(pipeline.device)
             with torch.no_grad():
-                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle, render_mask=render_mask)
+                outputs = pipeline.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
             if rgb_output_name not in outputs:
                 CONSOLE.rule("Error", style="red")
                 CONSOLE.print(f"Could not find {rgb_output_name} in the model outputs", justify="center")
