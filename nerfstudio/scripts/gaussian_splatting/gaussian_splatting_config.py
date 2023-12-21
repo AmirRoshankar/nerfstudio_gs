@@ -1,11 +1,8 @@
-from typing import Tuple
-
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass
 
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.data.datamanagers.gaussian_splatting_datamanager import GaussianSplattingDatamanagerConfig, GaussianSplattingDatamanagerConfigLayered
-from nerfstudio.data.datasets.gaussian_splatting_dataset import GaussianSplattingDataset, GaussianSplattingDatasetLayered
 from nerfstudio.pipelines.gaussian_splatting_pipeline import GaussianSplattingPipelineConfig, GaussianSplattingPipelineConfigLayered
 from nerfstudio.models.gaussian_splatting import GaussianSplattingModelConfig, GaussianSplattingModelConfigLayered
 
@@ -55,7 +52,7 @@ class GaussianSplattingConfig:
             **self.get_pipeline_setup_arguments(),
         )
 
-
+# Layered version of the GaussianSplattingConfig class
 @dataclass
 class GaussianSplattingConfigLayered:
     config: TrainerConfig = TrainerConfig(

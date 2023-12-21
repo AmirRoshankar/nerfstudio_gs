@@ -15,26 +15,22 @@
 
 # !/usr/bin/env python
 """
-Starts viewer in eval mode.
+Starts viewer in eval mode for the layer version of the viewer.
 """
 from __future__ import annotations
-from argparse import ArgumentParser
 
 import os
-import sys
 import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Literal, Union
 
 import tyro
 
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.pipelines.base_pipeline import Pipeline
 from nerfstudio.utils import writer
-from nerfstudio.utils import constants
 from nerfstudio.viewer.server.viewer_state import ViewerState
-from nerfstudio.scripts.gaussian_splatting.gaussian_splatting_config import GaussianSplattingConfig, GaussianSplattingConfigLayered
+from nerfstudio.scripts.gaussian_splatting.gaussian_splatting_config import GaussianSplattingConfigLayered
 
 @dataclass
 class RunViewer(GaussianSplattingConfigLayered):
@@ -98,12 +94,6 @@ def entrypoint():
 
 
 if __name__ == "__main__":
-    # parser = ArgumentParser(description="Visualizer parameters")
-    # parser.add_argument('--geom', action="store_true")
-    # args = parser.parse_args(sys.argv[1:])
-    
-    # constants.GEOM_FLAG = args.geom
-        
     entrypoint()
 
 # For sphinx docs

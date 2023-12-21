@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from nerfstudio.viewer.server.viewer_state import ViewerState
 
 RenderStates = Literal["low_move", "low_static", "high"]
-RenderActions = Literal["layer_rerender", "rerender", "move", "static", "step"]
+RenderActions = Literal["layer_rerender", "rerender", "move", "static", "step"] # added layer_renderer to list
 
 
 @dataclass

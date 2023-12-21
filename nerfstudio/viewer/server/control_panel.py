@@ -59,6 +59,7 @@ class ControlPanel:
         self.viser_server = viser_server
         self._elements_by_tag: DefaultDict[str, List[ViewerElement]] = defaultdict(lambda: [])
 
+        # GUI element for toggling between intensity vs depth views
         self._viewer_mode = ViewerButtonGroup(
             name="Visualization Mode  ",
             default_value="Intensity",
@@ -66,6 +67,8 @@ class ControlPanel:
             cb_hook=view_mode_cb,
         )
 
+        # GUI element for picking the inclusive layer bounds to visualize
+        # TODO: Fix so it's no longer floating points on the display
         self._layer_range = ViewerVec2(
             "Layer Range", (0, 0), cb_hook=layer_update_cb, hint="Layer range for rendering"
         )

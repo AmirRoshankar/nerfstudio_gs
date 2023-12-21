@@ -252,7 +252,7 @@ class MessageApi(abc.ABC):
         step: Optional[int] = None,
         hint: Optional[str] = None,
     ) -> GuiHandle[Tuple[int, int]]:
-        """Add a length-2 vector input to the GUI.
+        """Add a length-2 integer vector input to the GUI.
 
         Args:
             name: The name of the vector.
@@ -538,12 +538,12 @@ class MessageApi(abc.ABC):
                 max=tuple(scene_box.aabb[1].tolist()),
             )
         )
-        
+    
     def update_layers(self, layer_range) -> None:
         """Update the layer range.
 
         Args:
-            layer_range: layer range
+            layer_range: inclusive min and max layers
         """
         self._queue(
             messages.LayerRangeMessage(
@@ -575,7 +575,7 @@ class MessageApi(abc.ABC):
         look_at: Optional[Tuple[float, float, float]] = None,
         fov: Optional[int] = None,
         instant: bool = False,
-        layer_range: Optional[Tuple[int, int]] = [0, -1]
+        layer_range: Optional[Tuple[int, int]] = [0, 0]
     ) -> None:
         """Update the camera object in the viewer. If any of the arguments are None, the corresponding value will not
         be set in the viewer. For example, setting position only will maintain the same look-at point while moving
@@ -586,6 +586,7 @@ class MessageApi(abc.ABC):
             look_at: The position in world coordinates of the new look at point
             fov: The new field of view
             instant: Whether to move the camera instantly or animate
+            layer_range: Min and max layers to visualise
         """
         self._queue(messages.SetCameraMessage(look_at=look_at, position=position, fov=fov, instant=instant, layer_range=layer_range))
 

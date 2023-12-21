@@ -19,14 +19,13 @@ import os
 import json
 
 from dataclasses import dataclass, field
-from typing import Literal, Type, Optional
+from typing import Type, Optional
 
 import numpy as np
 import torch
 from torch.cuda.amp.grad_scaler import GradScaler
 
-from nerfstudio.data.datamanagers.gaussian_splatting_datamanager import GaussianSplattingDatamanager, GaussianSplattingDatamanagerLayered, \
-    GaussianSplattingDatamanagerConfig, GaussianSplattingDatamanagerConfigLayered
+from nerfstudio.data.datamanagers.gaussian_splatting_datamanager import GaussianSplattingDatamanager, GaussianSplattingDatamanagerLayered
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipelineConfig
 
 
@@ -159,7 +158,7 @@ class GaussianSplattingPipeline(Pipeline):
         kmat = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
         return np.eye(3) + kmat + kmat.dot(kmat) * ((1 - c) / (s ** 2 + 1e-10))
 
-
+# Layered version of the GaussianSplattingPipeline class
 class GaussianSplattingPipelineLayered(Pipeline):
     """Pipeline with logic for changing the number of rays per batch."""
 
@@ -209,8 +208,7 @@ class GaussianSplattingPipelineLayered(Pipeline):
         return {}
 
     def get_orientation_transform_from_image(self, ref_orientation: str):
-        # load camera information
-        #TODO AMIR: fix
+        # load camera information from the first layer found
         cameras_json_path = ""
         for subpath in os.listdir(self.model_path):
             if not os.path.isdir(os.path.join(self.model_path, subpath)):
@@ -251,7 +249,7 @@ class GaussianSplattingPipelineLayered(Pipeline):
         return torch.tensor(transform, dtype=torch.float)
 
     def get_orientation_transform_by_up(self):
-        #TODO AMIR: fix
+        # load camera path details from the first layer found
         cameras_json_path = ""
         for subpath in os.listdir(self.model_path):
             if not os.path.isdir(os.path.join(self.model_path, subpath)):

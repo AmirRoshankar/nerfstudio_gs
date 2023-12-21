@@ -154,14 +154,10 @@ class GaussianSplatting(Model):
 
         Background tensor (bg_color) must be on GPU!
         """
-        # Flipping orientation of gaussian
-        # # TODO: eliminate this or also flip scalings and rotations since this is innacurate        
-        flipped_xyz = pc.get_xyz
-        # flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
-        # flipped_xyz[..., 1] = -flipped_xyz[..., 1]
+        xyz = pc.get_xyz
         
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-        screenspace_points = torch.zeros_like(flipped_xyz, dtype=flipped_xyz.dtype, requires_grad=True,
+        screenspace_points = torch.zeros_like(xyz, dtype=xyz.dtype, requires_grad=True,
                                               device=bg_color.device) + 0
         try:
             screenspace_points.retain_grad()
@@ -189,7 +185,7 @@ class GaussianSplatting(Model):
 
         rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-        means3D = flipped_xyz
+        means3D = xyz
         means2D = screenspace_points
         opacity = pc.get_opacity
         geometry_opacity = pc.get_geometry_opacity
@@ -212,7 +208,7 @@ class GaussianSplatting(Model):
         if override_color is None:
             if pipe.convert_SHs_python:
                 shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree + 1) ** 2)
-                dir_pp = (flipped_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
+                dir_pp = (xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
                 dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
                 sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
                 colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
@@ -222,10 +218,6 @@ class GaussianSplatting(Model):
             colors_precomp = override_color
         
         if constants.GEOM_FLAG:
-            # mask_shs = shs.clone().detach()
-            # ones_rgb = torch.ones_like(mask_shs[:, :3, 0 ])
-            # mask_shs[:, :3, 0 ] = RGB2SH(ones_rgb)
-            # mask_shs[:, 3:, 1:] = 0.0
             cmap = cm.get_cmap("plasma")
             campos = viewpoint_camera.camera_center
             depths = -torch.norm(means3D - campos, dim=1)
@@ -233,8 +225,6 @@ class GaussianSplatting(Model):
             depths /= torch.max(depths)
             mask_shs = torch.zeros_like(shs)
             mask_shs[:, 0] = torch.from_numpy(2.5 * cmap(depths.cpu().numpy())[:, :3]).to(mask_shs.device)
-            # mask_shs[:, 0, 0] = 2.5 * (1.0 - depths)
-            # depth_opacity = torch.ones_like(geometry_opacity)
         
             # Rasterize visible Gaussians to image, obtain their radii (on screen). 
             rendered_image, radii_mask = rasterizer(
@@ -246,13 +236,6 @@ class GaussianSplatting(Model):
                 scales = scales,
                 rotations = rotations,
                 cov3D_precomp = cov3D_precomp)
-               
-            # # rendered_mask = rgb_to_grayscale(rendered_mask)
-            # return {"render": rendered_image,
-            #     "mask": rendered_mask,
-            #     "viewspace_points": screenspace_points,
-            #     "visibility_filter": radii > 0,
-            #     "radii": radii}
         else:
             # Rasterize visible Gaussians to image, obtain their radii (on screen).
             rendered_image, radii = rasterizer(
@@ -350,6 +333,23 @@ class GaussianSplattingLayered(Model):
         # reorient
         if self.orientation_transform is not None:
             c2w = torch.matmul(self.orientation_transform.to(c2w.device), c2w)
+        
+        
+        # Correction transforms that make the layers stack horizontally from bottom to top
+        # May need modifying if new slicing pattern is adopted
+        correction_rot_x = torch.eye(4).to(c2w.device)
+        correction_rot_x[1][1] = 0
+        correction_rot_x[1][2] = -1
+        correction_rot_x[2][1] = 1
+        correction_rot_x[2][2] = 0
+        
+        correction_rot_y = torch.eye(4).to(c2w.device)
+        correction_rot_y[0][0] = -1
+        correction_rot_y[0][2] = 0
+        correction_rot_y[2][0] = 0
+        correction_rot_y[2][2] = -1
+        c2w = torch.matmul(correction_rot_x, c2w)
+        c2w = torch.matmul(correction_rot_y, c2w)
 
         # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
         c2w[:3, 1:3] *= -1
@@ -379,11 +379,10 @@ class GaussianSplattingLayered(Model):
 
         Background tensor (bg_color) must be on GPU!
         """      
+        # Toggle to check the functionality of random background rendering
         # bg_color = torch.rand_like(bg_color)
-        
-        print("geom flag", constants.GEOM_FLAG)
-        print("layer range", constants.LAYER_RANGE)
-        # correct layer range
+
+        # bound the layer range as required
         if constants.LAYER_RANGE[0] >= pc.num_layers:
             constants.LAYER_RANGE[0] = pc.num_layers - 1
         if constants.LAYER_RANGE[1] >= pc.num_layers:
@@ -393,16 +392,15 @@ class GaussianSplattingLayered(Model):
             constants.LAYER_RANGE[0] = 0
         if constants.LAYER_RANGE[1] < 0:
             constants.LAYER_RANGE[1] = constants.LAYER_RANGE[0]
+            
+        # get the layers of interest 
         model_idxs = range(constants.LAYER_RANGE[0], constants.LAYER_RANGE[1] + 1)
         
-        flipped_xyz_all = pc.get_xyz(model_idxs)
-        flipped_xyz = flipped_xyz_all[~(torch.isnan(flipped_xyz_all).any(dim=1))]
-
-        # flipped_xyz[:, [1, 2]] = flipped_xyz[:, [2, 1]]
-        # flipped_xyz[..., 1] = -flipped_xyz[..., 1]
+        xyz = pc.get_xyz(model_idxs)
+        xyz = xyz[~(torch.isnan(xyz).any(dim=1))]
         
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-        screenspace_points = torch.zeros_like(flipped_xyz, dtype=flipped_xyz.dtype, requires_grad=True,
+        screenspace_points = torch.zeros_like(xyz, dtype=xyz.dtype, requires_grad=True,
                                               device=bg_color.device) + 0
         try:
             screenspace_points.retain_grad()
@@ -430,13 +428,12 @@ class GaussianSplattingLayered(Model):
 
         rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-        means3D = flipped_xyz
+        means3D = xyz
         means2D = screenspace_points
         opacity = pc.get_opacity(model_idxs)
-        opacity = opacity[~(torch.isnan(flipped_xyz_all).any(dim=1))]
-        # if constants.GEOM_FLAG:
+        opacity = opacity[~(torch.isnan(xyz).any(dim=1))]
         geometry_opacity = pc.get_geometry_opacity(model_idxs)
-        geometry_opacity = geometry_opacity[~(torch.isnan(flipped_xyz_all).any(dim=1))]
+        geometry_opacity = geometry_opacity[~(torch.isnan(xyz).any(dim=1))]
 
         # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
         # scaling / rotation by the rasterizer.
@@ -446,8 +443,8 @@ class GaussianSplattingLayered(Model):
         if pipe.compute_cov3D_python:
             cov3D_precomp = pc.get_covariance(scaling_modifier, model_idxs)
         else:
-            scales = pc.get_scaling(model_idxs)[~(torch.isnan(flipped_xyz_all).any(dim=1))]
-            rotations = pc.get_rotation(model_idxs)[~(torch.isnan(flipped_xyz_all).any(dim=1))]
+            scales = pc.get_scaling(model_idxs)[~(torch.isnan(xyz).any(dim=1))]
+            rotations = pc.get_rotation(model_idxs)[~(torch.isnan(xyz).any(dim=1))]
 
         # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
         # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
@@ -455,32 +452,18 @@ class GaussianSplattingLayered(Model):
         colors_precomp = None
         if override_color is None:
             if pipe.convert_SHs_python:
-                shs_view = pc.get_features(model_idxs)[~(torch.isnan(flipped_xyz_all).any(dim=1))].transpose(1, 2).view(-1, 3, (pc.max_sh_degree + 1) ** 2)
-                dir_pp = (flipped_xyz- viewpoint_camera.camera_center.repeat(pc.get_features(model_idxs).shape[0], 1))
+                shs_view = pc.get_features(model_idxs)[~(torch.isnan(xyz).any(dim=1))].transpose(1, 2).view(-1, 3, (pc.max_sh_degree + 1) ** 2)
+                dir_pp = (xyz- viewpoint_camera.camera_center.repeat(pc.get_features(model_idxs).shape[0], 1))
                 dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
                 sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
                 colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
             else:
-                shs = pc.get_features(model_idxs)[~(torch.isnan(flipped_xyz_all).any(dim=1))]
+                shs = pc.get_features(model_idxs)[~(torch.isnan(xyz).any(dim=1))]
         else:
             colors_precomp = override_color
 
-        # Rasterize visible Gaussians to image, obtain their radii (on screen).
-        rendered_image, radii = rasterizer(
-            means3D=means3D,
-            means2D=means2D,
-            shs=shs,
-            colors_precomp=colors_precomp,
-            opacities=geometry_opacity,
-            scales=scales,
-            rotations=rotations,
-            cov3D_precomp=cov3D_precomp)
-        
+        # Generate depth or colour rendering as required
         if constants.GEOM_FLAG:
-            # mask_shs = shs.clone().detach()
-            # ones_rgb = torch.ones_like(mask_shs[:, :3, 0 ])
-            # mask_shs[:, :3, 0 ] = RGB2SH(ones_rgb)
-            # mask_shs[:, 3:, 1:] = 0.0
             cmap = cm.get_cmap("plasma")
             campos = viewpoint_camera.camera_center
             depths = -torch.norm(means3D - campos, dim=1)
@@ -489,11 +472,8 @@ class GaussianSplattingLayered(Model):
             depth_shs = torch.zeros_like(shs)
             depth_shs[:, 0] = torch.from_numpy(2.5 * cmap(depths.cpu().numpy())[:, :3]).to(depth_shs.device)
 
-            # mask_shs[:, 0, 0] = 2.5 * (1.0 - depths)
-            # depth_opacity = torch.ones_like(geometry_opacity)
-        
             # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-            rendered_image, radii_mask = rasterizer(
+            rendered_image, radii = rasterizer(
                 means3D = means3D,
                 means2D = means2D,
                 shs = depth_shs,
@@ -502,16 +482,18 @@ class GaussianSplattingLayered(Model):
                 scales = scales,
                 rotations = rotations,
                 cov3D_precomp = cov3D_precomp)
-            
-            # rendered_image = rgb_to_grayscale(rendered_image)
-            # rendered_image = torch.clip(rendered_image, 0, 1)
-               
-            # # rendered_mask = rgb_to_grayscale(rendered_mask)
-            # return {"render": rendered_image,
-            #     "mask": rendered_mask,
-            #     "viewspace_points": screenspace_points,
-            #     "visibility_filter": radii > 0,
-            #     "radii": radii}
+        else:
+            # Rasterize visible Gaussians to image, obtain their radii (on screen).
+            rendered_image, radii = rasterizer(
+                means3D=means3D,
+                means2D=means2D,
+                shs=shs,
+                colors_precomp=colors_precomp,
+                opacities=geometry_opacity,
+                scales=scales,
+                rotations=rotations,
+                cov3D_precomp=cov3D_precomp)
+        
 
         # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
         # They will be excluded from value updates used in the splitting criteria.

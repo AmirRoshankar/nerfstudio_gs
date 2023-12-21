@@ -192,9 +192,7 @@ class ViewerState:
             
     def _layer_update(self, _) -> None:
         """Interrupt current render with layer message."""
-        # layer_range = self.control_panel.layer_range
-        # self.viser_server.update_layers(layer_range)
-        # self.camera_message.layer_range = layer_range
+        # Fix layer range to be within bounds
         layer_range = list(self.control_panel.layer_range)
         layer_range[0] = int(layer_range[0])
         layer_range[1] = int(layer_range[1])
@@ -209,10 +207,9 @@ class ViewerState:
             self.render_statemachine.action(RenderAction("rerender", self.camera_message))
             
     def _viewer_update(self, _) -> None:
-        """Interrupt current render with layer message."""
+        """Interrupt current render with viewing mode message."""
         view_mode = self.control_panel.viewer_mode
-        # self.viser_server.update_layers(layer_range)
-        # self.camera_message.layer_range = layer_range
+        
         constants.GEOM_FLAG = view_mode == 'Depth'
         if self.camera_message is not None:
             self.render_statemachine.action(RenderAction("rerender", self.camera_message))

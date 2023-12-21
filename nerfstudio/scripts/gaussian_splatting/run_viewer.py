@@ -21,18 +21,15 @@ from __future__ import annotations
 from argparse import ArgumentParser
 
 import os
-import sys
 import time
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Literal, Union
 
 import tyro
 
 from nerfstudio.engine.trainer import TrainerConfig
 from nerfstudio.pipelines.base_pipeline import Pipeline
 from nerfstudio.utils import writer
-from nerfstudio.utils import constants
 from nerfstudio.viewer.server.viewer_state import ViewerState
 from nerfstudio.scripts.gaussian_splatting.gaussian_splatting_config import GaussianSplattingConfig
 
@@ -50,7 +47,7 @@ class RunViewer(GaussianSplattingConfig):
 
     def save_checkpoint(self, *args, **kwargs):
         """
-        Mock method because constantswe pass this instance to viewer_state.update_scene
+        Mock method because we pass this instance to viewer_state.update_scene
         """
 
 
@@ -60,7 +57,7 @@ def _start_viewer(config: TrainerConfig, pipeline: Pipeline, step: int):
     Args:
         config: Configuration of pipeline to load
         pipeline: Pipeline instance of which to load weights
-        step: SteGEOM_FLAGp at which the pipeline was saved
+        step: Step at which the pipeline was saved
     """
     base_dir = config.get_base_dir()
     base_dir = Path(str(base_dir).replace('outputs', 'gaussOutputs'))
@@ -97,13 +94,7 @@ def entrypoint():
     tyro.cli(RunViewer).main()
 
 
-if __name__ == "__main__":
-    # parser = ArgumentParser(description="Visualizer parameters")
-    # parser.add_argument('--geom', action="store_true")
-    # args = parser.parse_args(sys.argv[1:])
-    
-    # constants.GEOM_FLAG = args.geom
-        
+if __name__ == "__main__":        
     entrypoint()
 
 # For sphinx docs
