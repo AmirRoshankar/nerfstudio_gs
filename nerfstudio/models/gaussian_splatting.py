@@ -431,9 +431,9 @@ class GaussianSplattingLayered(Model):
         means3D = xyz
         means2D = screenspace_points
         opacity = pc.get_opacity(model_idxs)
-        opacity = opacity[~(torch.isnan(xyz).any(dim=1))]
+        # opacity = opacity[~(torch.isnan(xyz).any(dim=1))]
         geometry_opacity = pc.get_geometry_opacity(model_idxs)
-        geometry_opacity = geometry_opacity[~(torch.isnan(xyz).any(dim=1))]
+        # geometry_opacity = geometry_opacity[~(torch.isnan(xyz).any(dim=1))]
 
         # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
         # scaling / rotation by the rasterizer.
